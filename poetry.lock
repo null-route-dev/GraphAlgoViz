@@ -68,6 +68,18 @@ files = [
 ]
 
 [[package]]
+name = "certifi"
+version = "2026.7.22"
+description = "Python package for providing Mozilla's CA Bundle."
+optional = false
+python-versions = ">=3.7"
+groups = ["dev"]
+files = [
+    {file = "certifi-2026.7.22-py3-none-any.whl", hash = "sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"},
+    {file = "certifi-2026.7.22.tar.gz", hash = "sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55"},
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -607,7 +619,22 @@ files = [
     {file = "typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5"},
 ]
 
+[[package]]
+name = "uncomment"
+version = "3.7.0"
+description = "A fast Rust-based CLI tool for removing comments from source code"
+optional = false
+python-versions = ">=3.8"
+groups = ["dev"]
+files = [
+    {file = "uncomment-3.7.0-py3-none-any.whl", hash = "sha256:90ec003ec059ac7e171224b04bccb5bb6813a7aaea07603b9993bed6aed7f24e"},
+    {file = "uncomment-3.7.0.tar.gz", hash = "sha256:1aed5be1d922bbb82e0ebfd8c223c03b1f0f491f087ad3e47807500be22a7d6e"},
+]
+
+[package.dependencies]
+certifi = ">=2024.7.4"
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "9792d1ada0841c9bef1ea5bf3b444f3f4a213c983f3e78d1f02271cca0562db2"
+content-hash = "a8dd661daf5174a3bc628ccfbe51224c14f1475eea5d01b201da13a366e2a06b"
