@@ -156,3 +156,25 @@ def test_neighbors_raises_for_missing_node(empty_graph: Graph) -> None:
     """neighbors raises KeyError for an unknown node."""
     with pytest.raises(KeyError):
         empty_graph.neighbors(42)
+
+
+def test_next_id_on_empty_graph(empty_graph: Graph) -> None:
+    """The first suggested id is 1."""
+    assert empty_graph.next_id() == 1
+
+
+def test_next_id_after_one_node(graph_with_two_nodes: Graph) -> None:
+    """next_id returns max + 1 when nodes exist."""
+    assert graph_with_two_nodes.next_id() == 3
+
+
+def test_next_id_does_not_reuse_deleted_ids(graph_with_two_nodes: Graph) -> None:
+    """A deleted id is not reused by next_id."""
+    graph_with_two_nodes.remove_node(2)
+    assert graph_with_two_nodes.next_id() == 3
+
+
+def test_next_id_ignores_edge_endpoints(graph_with_two_nodes: Graph) -> None:
+    """Edges do not influence the next id."""
+    graph_with_two_nodes.add_edge(Edge(source=1, target=2))
+    assert graph_with_two_nodes.next_id() == 3

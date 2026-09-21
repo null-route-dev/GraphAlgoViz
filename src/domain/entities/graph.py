@@ -9,11 +9,16 @@ class Graph:
 
     Nodes are indexed by id. Edges are stored as a flat list, which keeps
     the model simple and is sufficient for interactive use.
+
+    The graph tracks the highest node id ever assigned. Ids are never
+    reused, even after deletion, so stale references remain visibly
+    stale instead of silently aliasing a new node.
     """
 
     def __init__(self) -> None:
         self._nodes: dict[int, Node] = {}
         self._edges: list[Edge] = []
+        self._max_id: int = 0
 
     def add_node(self, node: Node) -> None:
         """Add a node to the graph.
@@ -24,9 +29,13 @@ class Graph:
             node: The node to add.
         """
         self._nodes[node.id] = node
+        self._max_id = max(self._max_id, node.id)
 
     def remove_node(self, node_id: int) -> None:
         """Remove a node and all edges incident to it.
+
+        The maximum assigned id is not decreased, so the id is never
+        reused by next_id.
 
         Args:
             node_id: Identifier of the node to remove.
@@ -80,6 +89,17 @@ class Graph:
             The number of nodes.
         """
         return len(self._nodes)
+
+    def next_id(self) -> int:
+        """Return an unused node id.
+
+        The id is always greater than every id ever assigned, so it is
+        never reused, even after deletions.
+
+        Returns:
+            A positive integer not yet used as a node id.
+        """
+        return self._max_id + 1
 
     def add_edge(self, edge: Edge) -> None:
         """Add an edge to the graph.
