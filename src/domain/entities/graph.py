@@ -170,18 +170,38 @@ class Graph:
         Raises:
             KeyError: If the node does not exist.
         """
+        return [neighbor for neighbor, _ in self.weighted_neighbors(node_id)]
+
+    def weighted_neighbors(self, node_id: int) -> list[tuple[int, float]]:
+        """Return (neighbor_id, weight) pairs for all adjacent nodes.
+
+        For undirected graphs, an edge is traversed in both directions.
+        For directed graphs, only edges leaving the node are considered.
+        When parallel edges connect the same pair of nodes, the smallest
+        weight is reported.
+
+        Args:
+            node_id: Identifier of the node to query.
+
+        Returns:
+            A list of (neighbor_id, weight) pairs in edge insertion order.
+
+        Raises:
+            KeyError: If the node does not exist.
+        """
         if node_id not in self._nodes:
             raise KeyError(f"Node {node_id} does not exist")
 
-        seen: set[int] = set()
-        result: list[int] = []
+        best: dict[int, float] = {}
         for edge in self._edges:
             neighbor: int | None = None
             if edge.source == node_id:
                 neighbor = edge.target
             elif not edge.directed and edge.target == node_id:
                 neighbor = edge.source
-            if neighbor is not None and neighbor not in seen:
-                seen.add(neighbor)
-                result.append(neighbor)
-        return result
+            if neighbor is None:
+                continue
+            if neighbor not in best or edge.weight < best[neighbor]:
+                best[neighbor] = edge.weight
+
+        return list(best.items())

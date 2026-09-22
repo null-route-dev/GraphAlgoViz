@@ -158,6 +158,34 @@ def test_neighbors_raises_for_missing_node(empty_graph: Graph) -> None:
         empty_graph.neighbors(42)
 
 
+def test_weighted_neighbors_undirected(graph_with_two_nodes: Graph) -> None:
+    """weighted_neighbors returns (neighbor, weight) pairs."""
+    graph_with_two_nodes.add_edge(Edge(source=1, target=2, weight=3.5))
+    assert graph_with_two_nodes.weighted_neighbors(1) == [(2, 3.5)]
+    assert graph_with_two_nodes.weighted_neighbors(2) == [(1, 3.5)]
+
+
+def test_weighted_neighbors_directed(graph_with_two_nodes: Graph) -> None:
+    """weighted_neighbors follows only outgoing edges when directed."""
+    graph_with_two_nodes.add_edge(Edge(source=1, target=2, weight=2.0, directed=True))
+    assert graph_with_two_nodes.weighted_neighbors(1) == [(2, 2.0)]
+    assert graph_with_two_nodes.weighted_neighbors(2) == []
+
+
+def test_weighted_neighbors_keeps_minimum_weight(graph_with_two_nodes: Graph) -> None:
+    """For parallel edges, the smallest weight is reported."""
+    graph_with_two_nodes.add_edge(Edge(source=1, target=2, weight=5.0))
+    graph_with_two_nodes.add_edge(Edge(source=1, target=2, weight=2.0))
+    graph_with_two_nodes.add_edge(Edge(source=1, target=2, weight=8.0))
+    assert graph_with_two_nodes.weighted_neighbors(1) == [(2, 2.0)]
+
+
+def test_weighted_neighbors_raises_for_missing_node(empty_graph: Graph) -> None:
+    """weighted_neighbors raises KeyError for an unknown node."""
+    with pytest.raises(KeyError):
+        empty_graph.weighted_neighbors(42)
+
+
 def test_next_id_on_empty_graph(empty_graph: Graph) -> None:
     """The first suggested id is 1."""
     assert empty_graph.next_id() == 1
