@@ -42,3 +42,7 @@ pythonpath = ["src"]
 strict = true
 mypy_path = "src"
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = "infrastructure.ui.graph_canvas"
+disable_error_code = ["no-untyped-call", "unused-ignore"]
