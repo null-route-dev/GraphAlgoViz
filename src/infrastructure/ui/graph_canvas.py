@@ -1,10 +1,18 @@
 """Canvas widget that renders a graph using matplotlib."""
 
+import math
+from collections.abc import Callable
+from typing import Any
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from domain.entities.graph import Graph
 from domain.value_objects.position import Position
+
+ClickCallback = Callable[[float, float, int | None], None]
+
+HIT_RADIUS = 0.05
 
 
 class GraphCanvas(FigureCanvasQTAgg):
@@ -12,19 +20,34 @@ class GraphCanvas(FigureCanvasQTAgg):
 
     Positions are expected in the unit square (0..1); the canvas maps
     them to its axes without knowing about pixels. The canvas does not
-    own the graph or its positions — it reads them on every draw.
+    own the graph or its positions — it reads them on every draw and
+    remembers the last drawn state only to resolve clicks to node ids.
+
+    The optional click callback receives the coordinates of a left
+    button press and the id of the node under the cursor (or None).
+    The canvas itself does not react to clicks; interpreting them is
+    the caller's responsibility.
 
     Args:
         parent: Optional Qt parent widget.
+        on_click: Optional callback invoked on left button press.
     """
 
-    def __init__(self, parent: object | None = None) -> None:
+    def __init__(
+        self,
+        parent: object | None = None,
+        on_click: ClickCallback | None = None,
+    ) -> None:
         self._figure = Figure(figsize=(6, 6), tight_layout=True)
         self._axes = self._figure.add_subplot(111)
         super().__init__(self._figure)
         if parent is not None:
             self.setParent(parent)  # type: ignore[arg-type]
         self._configure_axes()
+        self._on_click = on_click
+        self._last_graph: Graph | None = None
+        self._last_positions: dict[int, Position] = {}
+        self.mpl_connect("button_press_event", self._handle_click)
 
     def _configure_axes(self) -> None:
         """Set up axes limits and appearance."""
@@ -50,6 +73,8 @@ class GraphCanvas(FigureCanvasQTAgg):
             highlighted_edges: Edges to emphasize.
             labels: Optional per-node text labels.
         """
+        self._last_graph = graph
+        self._last_positions = dict(positions)
         self._axes.clear()
         self._configure_axes()
         self._draw_edges(graph, positions, highlighted_edges)
@@ -125,3 +150,48 @@ class GraphCanvas(FigureCanvasQTAgg):
                     fontsize=9,
                     zorder=3,
                 )
+
+    def _handle_click(self, event: Any) -> None:
+        """Forward a left mouse click to the registered callback.
+
+        Args:
+            event: A matplotlib mouse event.
+        """
+        if self._on_click is None:
+            return
+        if event.button != 1:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        x = float(event.xdata)
+        y = float(event.ydata)
+        node_id = self._find_node_at(x, y)
+        self._on_click(x, y, node_id)
+
+    def _find_node_at(self, x: float, y: float) -> int | None:
+        """Return the id of the node closest to the given point.
+
+        A node counts as hit if its center lies within HIT_RADIUS of
+        the point in unit coordinates. The closest node wins when
+        several are within range.
+
+        Args:
+            x: Horizontal coordinate of the point.
+            y: Vertical coordinate of the point.
+
+        Returns:
+            The id of the closest node within range, or None.
+        """
+        if self._last_graph is None:
+            return None
+        best_id: int | None = None
+        best_distance = HIT_RADIUS
+        for node in self._last_graph.nodes():
+            position = self._last_positions.get(node.id)
+            if position is None:
+                continue
+            distance = math.hypot(position.x - x, position.y - y)
+            if distance < best_distance:
+                best_distance = distance
+                best_id = node.id
+        return best_id

@@ -1,5 +1,6 @@
 """Main application window."""
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import QMainWindow, QToolBar
 
@@ -8,13 +9,15 @@ from domain.interfaces.graph_repository import GraphRepository
 from infrastructure.ui.graph_canvas import GraphCanvas
 from infrastructure.ui.interaction_mode import InteractionMode
 
+MESSAGE_TIMEOUT_MS = 2000
+
 
 class MainWindow(QMainWindow):
     """Top-level window hosting the graph canvas and toolbar.
 
-    The window owns the current interaction mode. The canvas reads it
-    on each mouse event but does not change it — mode switching is a
-    UI concern, not a canvas concern.
+    The window owns the current interaction mode and dispatches canvas
+    clicks accordingly. The canvas does not know about modes — it just
+    reports where the user clicked and which node was under the cursor.
 
     Args:
         repository: Source of the current graph.
@@ -35,7 +38,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("GraphAlgoViz")
         self.resize(900, 700)
 
-        self._canvas = GraphCanvas(self)
+        self._canvas = GraphCanvas(self, on_click=self._handle_canvas_click)
         self.setCentralWidget(self._canvas)
 
         self._build_toolbar()
@@ -58,7 +61,7 @@ class MainWindow(QMainWindow):
             mode: The mode to activate.
         """
         self._mode = mode
-        self._status_bar.showMessage(f"Mode: {mode.display_name}")
+        self._restore_mode_message()
 
     def _build_toolbar(self) -> None:
         """Create the toolbar with mode-switching actions."""
@@ -86,7 +89,42 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self) -> None:
         """Create the status bar and show the initial mode."""
         self._status_bar = self.statusBar()
+        self._restore_mode_message()
+
+    def _restore_mode_message(self) -> None:
+        """Show the current mode in the status bar."""
         self._status_bar.showMessage(f"Mode: {self._mode.display_name}")
+
+    def _show_temporary_message(self, text: str) -> None:
+        """Show a short-lived status bar message, then restore the mode.
+
+        Args:
+            text: The message to display.
+        """
+        self._status_bar.showMessage(text)
+        QTimer.singleShot(MESSAGE_TIMEOUT_MS, self._restore_mode_message)
+
+    def _handle_canvas_click(
+        self,
+        x: float,
+        y: float,
+        node_id: int | None,
+    ) -> None:
+        """Dispatch a canvas click according to the active mode.
+
+        Args:
+            x: Horizontal coordinate of the click in the unit square.
+            y: Vertical coordinate of the click in the unit square.
+            node_id: Id of the node under the cursor, or None.
+        """
+        if self._mode is InteractionMode.ADD_NODE:
+            self._show_temporary_message(f"Add node at ({x:.2f}, {y:.2f})")
+        elif self._mode is InteractionMode.ADD_EDGE:
+            label = "no node" if node_id is None else f"node {node_id}"
+            self._show_temporary_message(f"Add edge: clicked {label}")
+        elif self._mode is InteractionMode.DELETE:
+            label = "no node" if node_id is None else f"node {node_id}"
+            self._show_temporary_message(f"Delete: clicked {label}")
 
     def _refresh_canvas(self) -> None:
         """Redraw the canvas from the current graph and positions."""
