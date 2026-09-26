@@ -20,9 +20,10 @@ class MainWindow(QMainWindow):
     """Top-level window hosting the graph canvas and toolbar.
 
     The window owns the current interaction mode, the pending edge
-    source for the ADD_EDGE mode, and the mapping from node id to
-    position on the canvas. It translates canvas clicks into use case
-    calls and refreshes the canvas afterwards.
+    source for the ADD_EDGE mode, the node currently being dragged in
+    SELECT mode, and the mapping from node id to position on the
+    canvas. It translates canvas events into use case calls and
+    refreshes the canvas afterwards.
 
     Args:
         repository: Source of the current graph.
@@ -50,11 +51,17 @@ class MainWindow(QMainWindow):
         self._positions = layout_service.circular(repository.get())
         self._mode = InteractionMode.SELECT
         self._pending_edge_source: int | None = None
+        self._drag_node: int | None = None
 
         self.setWindowTitle("GraphAlgoViz")
         self.resize(900, 700)
 
-        self._canvas = GraphCanvas(self, on_click=self._handle_canvas_click)
+        self._canvas = GraphCanvas(
+            self,
+            on_click=self._handle_canvas_click,
+            on_drag_move=self._handle_canvas_drag_move,
+            on_drag_end=self._handle_canvas_drag_end,
+        )
         self.setCentralWidget(self._canvas)
 
         self._build_toolbar()
@@ -73,14 +80,15 @@ class MainWindow(QMainWindow):
     def set_mode(self, mode: InteractionMode) -> None:
         """Switch the interaction mode.
 
-        Clears any pending edge source so that the next click in
-        ADD_EDGE mode starts a fresh pair.
+        Clears any pending edge source and any active drag so that
+        the next mouse event starts from a clean state.
 
         Args:
             mode: The mode to activate.
         """
         self._mode = mode
         self._pending_edge_source = None
+        self._drag_node = None
         self._restore_mode_message()
 
     def _build_toolbar(self) -> None:
@@ -137,12 +145,32 @@ class MainWindow(QMainWindow):
             y: Vertical coordinate of the click in the unit square.
             node_id: Id of the node under the cursor, or None.
         """
-        if self._mode is InteractionMode.ADD_NODE:
+        if self._mode is InteractionMode.SELECT:
+            self._drag_node = node_id
+        elif self._mode is InteractionMode.ADD_NODE:
             self._handle_add_node(x, y)
         elif self._mode is InteractionMode.ADD_EDGE:
             self._handle_add_edge(node_id)
         elif self._mode is InteractionMode.DELETE:
             self._handle_delete(node_id)
+
+    def _handle_canvas_drag_move(self, x: float, y: float) -> None:
+        """Move the node currently being dragged, if any.
+
+        Args:
+            x: Horizontal coordinate of the cursor in the unit square.
+            y: Vertical coordinate of the cursor in the unit square.
+        """
+        if self._mode is not InteractionMode.SELECT:
+            return
+        if self._drag_node is None:
+            return
+        self._positions[self._drag_node] = Position(x=x, y=y)
+        self._refresh_canvas()
+
+    def _handle_canvas_drag_end(self) -> None:
+        """Finish any active drag."""
+        self._drag_node = None
 
     def _handle_add_node(self, x: float, y: float) -> None:
         """Add a node at the clicked position.

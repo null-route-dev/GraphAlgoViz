@@ -11,6 +11,8 @@ from domain.entities.graph import Graph
 from domain.value_objects.position import Position
 
 ClickCallback = Callable[[float, float, int | None], None]
+DragMoveCallback = Callable[[float, float], None]
+DragEndCallback = Callable[[], None]
 
 HIT_RADIUS = 0.05
 
@@ -23,20 +25,31 @@ class GraphCanvas(FigureCanvasQTAgg):
     own the graph or its positions — it reads them on every draw and
     remembers the last drawn state only to resolve clicks to node ids.
 
-    The optional click callback receives the coordinates of a left
-    button press and the id of the node under the cursor (or None).
-    The canvas itself does not react to clicks; interpreting them is
-    the caller's responsibility.
+    The canvas reports three kinds of mouse activity:
+
+    - a left button press, with the coordinates and the id of the node
+      under the cursor (or None);
+    - mouse motion while the left button is held down over a node that
+      was under the cursor at press time;
+    - the release of the left button.
+
+    The canvas does not interpret these events. Deciding whether a
+    drag is meaningful, and in which mode, is the caller's concern.
 
     Args:
         parent: Optional Qt parent widget.
         on_click: Optional callback invoked on left button press.
+        on_drag_move: Optional callback invoked on mouse motion while
+            the left button is held down after a press over a node.
+        on_drag_end: Optional callback invoked on left button release.
     """
 
     def __init__(
         self,
         parent: object | None = None,
         on_click: ClickCallback | None = None,
+        on_drag_move: DragMoveCallback | None = None,
+        on_drag_end: DragEndCallback | None = None,
     ) -> None:
         self._figure = Figure(figsize=(6, 6), tight_layout=True)
         self._axes = self._figure.add_subplot(111)
@@ -45,9 +58,14 @@ class GraphCanvas(FigureCanvasQTAgg):
             self.setParent(parent)  # type: ignore[arg-type]
         self._configure_axes()
         self._on_click = on_click
+        self._on_drag_move = on_drag_move
+        self._on_drag_end = on_drag_end
         self._last_graph: Graph | None = None
         self._last_positions: dict[int, Position] = {}
-        self.mpl_connect("button_press_event", self._handle_click)
+        self._pressed_node: int | None = None
+        self.mpl_connect("button_press_event", self._handle_press)
+        self.mpl_connect("motion_notify_event", self._handle_motion)
+        self.mpl_connect("button_release_event", self._handle_release)
 
     def _configure_axes(self) -> None:
         """Set up axes limits and appearance."""
@@ -151,14 +169,12 @@ class GraphCanvas(FigureCanvasQTAgg):
                     zorder=3,
                 )
 
-    def _handle_click(self, event: Any) -> None:
-        """Forward a left mouse click to the registered callback.
+    def _handle_press(self, event: Any) -> None:
+        """Handle a left mouse press.
 
         Args:
             event: A matplotlib mouse event.
         """
-        if self._on_click is None:
-            return
         if event.button != 1:
             return
         if event.xdata is None or event.ydata is None:
@@ -166,7 +182,36 @@ class GraphCanvas(FigureCanvasQTAgg):
         x = float(event.xdata)
         y = float(event.ydata)
         node_id = self._find_node_at(x, y)
-        self._on_click(x, y, node_id)
+        self._pressed_node = node_id
+        if self._on_click is not None:
+            self._on_click(x, y, node_id)
+
+    def _handle_motion(self, event: Any) -> None:
+        """Handle mouse motion while the left button is held down.
+
+        Args:
+            event: A matplotlib mouse event.
+        """
+        if event.button != 1:
+            return
+        if self._pressed_node is None:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        if self._on_drag_move is not None:
+            self._on_drag_move(float(event.xdata), float(event.ydata))
+
+    def _handle_release(self, event: Any) -> None:
+        """Handle the release of the left mouse button.
+
+        Args:
+            event: A matplotlib mouse event.
+        """
+        if event.button != 1:
+            return
+        self._pressed_node = None
+        if self._on_drag_end is not None:
+            self._on_drag_end()
 
     def _find_node_at(self, x: float, y: float) -> int | None:
         """Return the id of the node closest to the given point.
