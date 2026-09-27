@@ -16,6 +16,10 @@ DragEndCallback = Callable[[], None]
 
 HIT_RADIUS = 0.05
 
+COLOR_DEFAULT = "#1f77b4"
+COLOR_HIGHLIGHTED = "#ff7f0e"
+COLOR_CURRENT = "#d62728"
+
 
 class GraphCanvas(FigureCanvasQTAgg):
     """A matplotlib canvas displaying a graph.
@@ -79,6 +83,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         graph: Graph,
         positions: dict[int, Position],
         highlighted_nodes: frozenset[int] = frozenset(),
+        current_node: int | None = None,
         highlighted_edges: frozenset[tuple[int, int]] = frozenset(),
         labels: dict[int, str] | None = None,
     ) -> None:
@@ -88,6 +93,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             graph: The graph to render.
             positions: Mapping from node id to position.
             highlighted_nodes: Ids of nodes to emphasize.
+            current_node: Id of the node to draw as the current one.
             highlighted_edges: Edges to emphasize.
             labels: Optional per-node text labels.
         """
@@ -96,7 +102,13 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._axes.clear()
         self._configure_axes()
         self._draw_edges(graph, positions, highlighted_edges)
-        self._draw_nodes(graph, positions, highlighted_nodes, labels or {})
+        self._draw_nodes(
+            graph,
+            positions,
+            highlighted_nodes,
+            current_node,
+            labels or {},
+        )
         self.draw()
 
     def _draw_edges(
@@ -114,7 +126,7 @@ class GraphCanvas(FigureCanvasQTAgg):
                 edge.target,
                 edge.source,
             ) in highlighted
-            color = "#d62728" if is_highlighted else "#888888"
+            color = COLOR_CURRENT if is_highlighted else "#888888"
             width = 2.5 if is_highlighted else 1.0
             self._axes.plot(
                 [start.x, end.x],
@@ -129,14 +141,19 @@ class GraphCanvas(FigureCanvasQTAgg):
         graph: Graph,
         positions: dict[int, Position],
         highlighted: frozenset[int],
+        current: int | None,
         labels: dict[int, str],
     ) -> None:
         for node in graph.nodes():
             if node.id not in positions:
                 continue
             position = positions[node.id]
-            is_highlighted = node.id in highlighted
-            color = "#d62728" if is_highlighted else "#1f77b4"
+            if node.id == current:
+                color = COLOR_CURRENT
+            elif node.id in highlighted:
+                color = COLOR_HIGHLIGHTED
+            else:
+                color = COLOR_DEFAULT
             self._axes.plot(
                 position.x,
                 position.y,
