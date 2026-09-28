@@ -10,15 +10,17 @@ from matplotlib.figure import Figure
 from domain.entities.graph import Graph
 from domain.value_objects.position import Position
 
-ClickCallback = Callable[[float, float, int | None], None]
+ClickCallback = Callable[[float, float, int | None, tuple[int, int] | None], None]
 DragMoveCallback = Callable[[float, float], None]
 DragEndCallback = Callable[[], None]
 
-HIT_RADIUS = 0.05
+NODE_HIT_RADIUS = 0.05
+EDGE_HIT_RADIUS = 0.02
 
 COLOR_DEFAULT = "#1f77b4"
 COLOR_HIGHLIGHTED = "#ff7f0e"
 COLOR_CURRENT = "#d62728"
+COLOR_EDGE = "#888888"
 
 
 class GraphCanvas(FigureCanvasQTAgg):
@@ -27,12 +29,15 @@ class GraphCanvas(FigureCanvasQTAgg):
     Positions are expected in the unit square (0..1); the canvas maps
     them to its axes without knowing about pixels. The canvas does not
     own the graph or its positions — it reads them on every draw and
-    remembers the last drawn state only to resolve clicks to node ids.
+    remembers the last drawn state only to resolve clicks to node ids
+    and edges.
 
     The canvas reports three kinds of mouse activity:
 
-    - a left button press, with the coordinates and the id of the node
-      under the cursor (or None);
+    - a left button press, with the coordinates, the id of the node
+      under the cursor (or None), and the edge under the cursor as a
+      (source, target) pair (or None). A node hit takes priority over
+      an edge hit at the same point;
     - mouse motion while the left button is held down over a node that
       was under the cursor at press time;
     - the release of the left button.
@@ -126,7 +131,7 @@ class GraphCanvas(FigureCanvasQTAgg):
                 edge.target,
                 edge.source,
             ) in highlighted
-            color = COLOR_CURRENT if is_highlighted else "#888888"
+            color = COLOR_CURRENT if is_highlighted else COLOR_EDGE
             width = 2.5 if is_highlighted else 1.0
             self._axes.plot(
                 [start.x, end.x],
@@ -199,9 +204,10 @@ class GraphCanvas(FigureCanvasQTAgg):
         x = float(event.xdata)
         y = float(event.ydata)
         node_id = self._find_node_at(x, y)
+        edge = None if node_id is not None else self._find_edge_at(x, y)
         self._pressed_node = node_id
         if self._on_click is not None:
-            self._on_click(x, y, node_id)
+            self._on_click(x, y, node_id, edge)
 
     def _handle_motion(self, event: Any) -> None:
         """Handle mouse motion while the left button is held down.
@@ -233,8 +239,8 @@ class GraphCanvas(FigureCanvasQTAgg):
     def _find_node_at(self, x: float, y: float) -> int | None:
         """Return the id of the node closest to the given point.
 
-        A node counts as hit if its center lies within HIT_RADIUS of
-        the point in unit coordinates. The closest node wins when
+        A node counts as hit if its center lies within NODE_HIT_RADIUS
+        of the point in unit coordinates. The closest node wins when
         several are within range.
 
         Args:
@@ -247,7 +253,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         if self._last_graph is None:
             return None
         best_id: int | None = None
-        best_distance = HIT_RADIUS
+        best_distance = NODE_HIT_RADIUS
         for node in self._last_graph.nodes():
             position = self._last_positions.get(node.id)
             if position is None:
@@ -257,3 +263,66 @@ class GraphCanvas(FigureCanvasQTAgg):
                 best_distance = distance
                 best_id = node.id
         return best_id
+
+    def _find_edge_at(self, x: float, y: float) -> tuple[int, int] | None:
+        """Return the endpoints of the edge closest to the given point.
+
+        An edge counts as hit if the point lies within EDGE_HIT_RADIUS
+        of the segment connecting its endpoints. The closest edge wins
+        when several are within range.
+
+        Args:
+            x: Horizontal coordinate of the point.
+            y: Vertical coordinate of the point.
+
+        Returns:
+            The (source, target) pair of the closest edge within
+            range, or None.
+        """
+        if self._last_graph is None:
+            return None
+        best_edge: tuple[int, int] | None = None
+        best_distance = EDGE_HIT_RADIUS
+        for edge in self._last_graph.edges():
+            start = self._last_positions.get(edge.source)
+            end = self._last_positions.get(edge.target)
+            if start is None or end is None:
+                continue
+            distance = _point_to_segment_distance(x, y, start.x, start.y, end.x, end.y)
+            if distance < best_distance:
+                best_distance = distance
+                best_edge = (edge.source, edge.target)
+        return best_edge
+
+
+def _point_to_segment_distance(
+    px: float,
+    py: float,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+) -> float:
+    """Return the distance from a point to a line segment.
+
+    Args:
+        px: Horizontal coordinate of the point.
+        py: Vertical coordinate of the point.
+        x1: Horizontal coordinate of the segment start.
+        y1: Vertical coordinate of the segment start.
+        x2: Horizontal coordinate of the segment end.
+        y2: Vertical coordinate of the segment end.
+
+    Returns:
+        The Euclidean distance from the point to the closest point
+        on the segment.
+    """
+    dx = x2 - x1
+    dy = y2 - y1
+    if dx == 0.0 and dy == 0.0:
+        return math.hypot(px - x1, py - y1)
+    t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    return math.hypot(px - proj_x, py - proj_y)

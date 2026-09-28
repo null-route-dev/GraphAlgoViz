@@ -9,6 +9,7 @@ from application.algorithms.step_result import StepResult
 from application.services.layout_service import LayoutService
 from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
+from application.use_cases.remove_edge import RemoveEdgeUseCase
 from application.use_cases.remove_node import RemoveNodeUseCase
 from domain.interfaces.graph_repository import GraphRepository
 from domain.value_objects.position import Position
@@ -38,6 +39,7 @@ class MainWindow(QMainWindow):
         add_node_use_case: Use case for adding a node.
         add_edge_use_case: Use case for adding an edge.
         remove_node_use_case: Use case for removing a node.
+        remove_edge_use_case: Use case for removing an edge.
     """
 
     def __init__(
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         add_node_use_case: AddNodeUseCase,
         add_edge_use_case: AddEdgeUseCase,
         remove_node_use_case: RemoveNodeUseCase,
+        remove_edge_use_case: RemoveEdgeUseCase,
     ) -> None:
         super().__init__()
         self._repository = repository
@@ -56,6 +59,7 @@ class MainWindow(QMainWindow):
         self._add_node_use_case = add_node_use_case
         self._add_edge_use_case = add_edge_use_case
         self._remove_node_use_case = remove_node_use_case
+        self._remove_edge_use_case = remove_edge_use_case
 
         self._positions = layout_service.circular(repository.get())
         self._mode = InteractionMode.SELECT
@@ -184,6 +188,7 @@ class MainWindow(QMainWindow):
         x: float,
         y: float,
         node_id: int | None,
+        edge: tuple[int, int] | None,
     ) -> None:
         """Dispatch a canvas click according to the active mode.
 
@@ -193,6 +198,7 @@ class MainWindow(QMainWindow):
             x: Horizontal coordinate of the click in the unit square.
             y: Vertical coordinate of the click in the unit square.
             node_id: Id of the node under the cursor, or None.
+            edge: Endpoints of the edge under the cursor, or None.
         """
         if self._algorithm_state in (
             AlgorithmState.RUNNING,
@@ -206,7 +212,7 @@ class MainWindow(QMainWindow):
         elif self._mode is InteractionMode.ADD_EDGE:
             self._handle_add_edge(node_id)
         elif self._mode is InteractionMode.DELETE:
-            self._handle_delete(node_id)
+            self._handle_delete(node_id, edge)
 
     def _handle_canvas_drag_move(self, x: float, y: float) -> None:
         """Move the node currently being dragged, if any.
@@ -275,15 +281,35 @@ class MainWindow(QMainWindow):
         self._refresh_canvas()
         self._show_temporary_message(f"Added edge {source} -> {node_id}")
 
-    def _handle_delete(self, node_id: int | None) -> None:
-        """Remove the node under the cursor, if any.
+    def _handle_delete(
+        self,
+        node_id: int | None,
+        edge: tuple[int, int] | None,
+    ) -> None:
+        """Remove the node or edge under the cursor.
+
+        Nodes take priority over edges: if the click landed on a node,
+        only the node is removed. Otherwise, if an edge was hit, that
+        edge is removed.
 
         Args:
             node_id: Id of the node under the cursor, or None.
+            edge: Endpoints of the edge under the cursor, or None.
         """
-        if node_id is None:
-            self._show_temporary_message("Delete: no node under cursor")
+        if node_id is not None:
+            self._handle_delete_node(node_id)
             return
+        if edge is not None:
+            self._handle_delete_edge(edge)
+            return
+        self._show_temporary_message("Delete: nothing under cursor")
+
+    def _handle_delete_node(self, node_id: int) -> None:
+        """Remove a node and all edges incident to it.
+
+        Args:
+            node_id: Id of the node to remove.
+        """
         self._remove_node_use_case.execute(node_id=node_id)
         self._positions.pop(node_id, None)
         if self._pending_edge_source == node_id:
@@ -291,6 +317,17 @@ class MainWindow(QMainWindow):
         self._sync_available_nodes()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted node {node_id}")
+
+    def _handle_delete_edge(self, edge: tuple[int, int]) -> None:
+        """Remove the edge between two nodes.
+
+        Args:
+            edge: Endpoints of the edge to remove.
+        """
+        source, target = edge
+        self._remove_edge_use_case.execute(source=source, target=target)
+        self._refresh_canvas()
+        self._show_temporary_message(f"Deleted edge {source} -> {target}")
 
     def _on_run_requested(
         self,
