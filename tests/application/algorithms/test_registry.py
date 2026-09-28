@@ -5,6 +5,7 @@ import pytest
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
+from application.algorithms.prim_mst import PrimMST
 from application.algorithms.registry import (
     AlgorithmInfo,
     AlgorithmRegistry,
@@ -108,10 +109,15 @@ def test_count_reflects_registered_algorithms() -> None:
 
 
 def test_default_registry_contains_builtin_algorithms() -> None:
-    """The default registry exposes dfs, bfs, and dijkstra in order."""
+    """The default registry exposes all built-in algorithms in order."""
     registry = build_default_registry()
 
-    assert [info.id for info in registry.all()] == ["dfs", "bfs", "dijkstra"]
+    assert [info.id for info in registry.all()] == [
+        "dfs",
+        "bfs",
+        "dijkstra",
+        "prim",
+    ]
 
 
 def test_default_registry_describes_each_algorithm() -> None:
@@ -131,3 +137,4 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("dfs", graph, 1), DepthFirstSearch)
     assert isinstance(registry.create("bfs", graph, 1), BreadthFirstSearch)
     assert isinstance(registry.create("dijkstra", graph, 1), Dijkstra)
+    assert isinstance(registry.create("prim", graph, 1), PrimMST)

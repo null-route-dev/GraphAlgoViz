@@ -7,6 +7,7 @@ from application.algorithms.base import BaseAlgorithm
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
+from application.algorithms.prim_mst import PrimMST
 from domain.entities.graph import Graph
 
 AlgorithmFactory = Callable[[Graph, int], BaseAlgorithm]
@@ -114,7 +115,7 @@ def build_default_registry() -> AlgorithmRegistry:
 
     Returns:
         A new registry containing depth-first search, breadth-first
-        search, and Dijkstra.
+        search, Dijkstra, and Prim's minimum spanning tree.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -148,6 +149,17 @@ def build_default_registry() -> AlgorithmRegistry:
                 "non-negative edge weights."
             ),
             factory=Dijkstra,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="prim",
+            display_name="Prim's Minimum Spanning Tree",
+            description=(
+                "Builds a minimum spanning tree by repeatedly adding "
+                "the cheapest edge connecting a new node to the tree."
+            ),
+            factory=PrimMST,
         )
     )
     return registry
