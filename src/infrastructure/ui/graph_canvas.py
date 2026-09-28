@@ -140,6 +140,31 @@ class GraphCanvas(FigureCanvasQTAgg):
                 linewidth=width,
                 zorder=1,
             )
+            self._draw_edge_weight(edge.weight, start, end)
+
+    def _draw_edge_weight(
+        self,
+        weight: float,
+        start: Position,
+        end: Position,
+    ) -> None:
+        mid_x = (start.x + end.x) / 2.0
+        mid_y = (start.y + end.y) / 2.0
+        self._axes.text(
+            mid_x,
+            mid_y,
+            f"{weight:g}",
+            ha="center",
+            va="center",
+            color="black",
+            fontsize=8,
+            bbox={
+                "boxstyle": "round,pad=0.15",
+                "facecolor": "white",
+                "edgecolor": "none",
+            },
+            zorder=1.5,
+        )
 
     def _draw_nodes(
         self,
