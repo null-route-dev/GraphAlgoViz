@@ -6,6 +6,7 @@ from typing import Any
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from matplotlib.patches import FancyArrowPatch
 
 from domain.entities.graph import Graph
 from domain.value_objects.position import Position
@@ -16,11 +17,14 @@ DragEndCallback = Callable[[], None]
 
 NODE_HIT_RADIUS = 0.05
 EDGE_HIT_RADIUS = 0.02
+NODE_VISUAL_RADIUS = 0.025
 
 COLOR_DEFAULT = "#1f77b4"
 COLOR_HIGHLIGHTED = "#ff7f0e"
 COLOR_CURRENT = "#d62728"
 COLOR_EDGE = "#888888"
+
+ARROW_MUTATION_SCALE = 14
 
 
 class GraphCanvas(FigureCanvasQTAgg):
@@ -31,6 +35,13 @@ class GraphCanvas(FigureCanvasQTAgg):
     own the graph or its positions — it reads them on every draw and
     remembers the last drawn state only to resolve clicks to node ids
     and edges.
+
+    Directed edges are drawn with an arrow head near the target node.
+    The line is shortened by NODE_VISUAL_RADIUS at the target end so
+    that the arrow head is not hidden under the node marker. Hit
+    testing always uses the full segment between node centers, so
+    clicking near a node still resolves to the node (node hits take
+    priority over edge hits).
 
     The canvas reports three kinds of mouse activity:
 
@@ -133,14 +144,47 @@ class GraphCanvas(FigureCanvasQTAgg):
             ) in highlighted
             color = COLOR_CURRENT if is_highlighted else COLOR_EDGE
             width = 2.5 if is_highlighted else 1.0
-            self._axes.plot(
-                [start.x, end.x],
-                [start.y, end.y],
-                color=color,
-                linewidth=width,
-                zorder=1,
-            )
+            if edge.directed:
+                self._draw_directed_edge(start, end, color, width)
+            else:
+                self._draw_undirected_edge(start, end, color, width)
             self._draw_edge_weight(edge.weight, start, end)
+
+    def _draw_undirected_edge(
+        self,
+        start: Position,
+        end: Position,
+        color: str,
+        width: float,
+    ) -> None:
+        self._axes.plot(
+            [start.x, end.x],
+            [start.y, end.y],
+            color=color,
+            linewidth=width,
+            zorder=1,
+        )
+
+    def _draw_directed_edge(
+        self,
+        start: Position,
+        end: Position,
+        color: str,
+        width: float,
+    ) -> None:
+        shortened_end = _shorten_towards(start, end, NODE_VISUAL_RADIUS)
+        arrow = FancyArrowPatch(
+            (start.x, start.y),
+            (shortened_end.x, shortened_end.y),
+            arrowstyle="->",
+            mutation_scale=ARROW_MUTATION_SCALE,
+            color=color,
+            linewidth=width,
+            shrinkA=0.0,
+            shrinkB=0.0,
+            zorder=1,
+        )
+        self._axes.add_patch(arrow)
 
     def _draw_edge_weight(
         self,
@@ -293,8 +337,11 @@ class GraphCanvas(FigureCanvasQTAgg):
         """Return the endpoints of the edge closest to the given point.
 
         An edge counts as hit if the point lies within EDGE_HIT_RADIUS
-        of the segment connecting its endpoints. The closest edge wins
-        when several are within range.
+        of the segment connecting its endpoints. The segment used for
+        hit testing always runs between node centers, regardless of
+        whether the edge is drawn with a shortened arrow head.
+
+        The closest edge wins when several are within range.
 
         Args:
             x: Horizontal coordinate of the point.
@@ -351,3 +398,30 @@ def _point_to_segment_distance(
     proj_x = x1 + t * dx
     proj_y = y1 + t * dy
     return math.hypot(px - proj_x, py - proj_y)
+
+
+def _shorten_towards(
+    start: Position,
+    end: Position,
+    distance: float,
+) -> Position:
+    """Return a point on the segment closer to start by a fixed distance.
+
+    Args:
+        start: The anchor point that stays fixed.
+        end: The point being pulled back towards start.
+        distance: How far to move from end towards start.
+
+    Returns:
+        A new position between start and end, at the given distance
+        from end. If the segment is shorter than the requested
+        distance, returns start.
+    """
+    total = math.hypot(end.x - start.x, end.y - start.y)
+    if total <= distance:
+        return start
+    ratio = (total - distance) / total
+    return Position(
+        x=start.x + (end.x - start.x) * ratio,
+        y=start.y + (end.y - start.y) * ratio,
+    )
