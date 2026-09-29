@@ -1,11 +1,20 @@
 """Main application window."""
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QToolBar
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtWidgets import (
+    QDockWidget,
+    QFileDialog,
+    QMainWindow,
+    QMessageBox,
+    QToolBar,
+)
 
 from application.algorithms.registry import AlgorithmRegistry
 from application.algorithms.step_result import StepResult
+from application.project_storage import ProjectStorage, ProjectStorageError
 from application.services.layout_service import LayoutService
 from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
@@ -17,7 +26,9 @@ from domain.interfaces.graph_repository import GraphRepository
 from domain.value_objects.position import Position
 from infrastructure.animation.algorithm_animator import AlgorithmAnimator
 from infrastructure.ui.algorithm_panel import AlgorithmPanel, AlgorithmState
-from infrastructure.ui.dialogs.edge_attributes_dialog import EdgeAttributesDialog
+from infrastructure.ui.dialogs.edge_attributes_dialog import (
+    EdgeAttributesDialog,
+)
 from infrastructure.ui.graph_canvas import GraphCanvas
 from infrastructure.ui.interaction_mode import InteractionMode
 
@@ -25,20 +36,24 @@ MESSAGE_TIMEOUT_MS = 2000
 DEFAULT_SPEED = 5
 BASE_INTERVAL_MS = 1000
 
+PROJECT_FILTER = "GraphAlgoViz project (*.gaviz);;All files (*)"
+PROJECT_SUFFIX = ".gaviz"
+
 
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and algorithm panel.
 
     The window owns the current interaction mode, the pending edge
-    source, the node being dragged, the node positions, and the
-    algorithm state. It dispatches canvas clicks to use cases or to
-    the animator, and reflects algorithm progress in the panel and
-    the canvas.
+    source, the node being dragged, the node positions, the algorithm
+    state, and the path of the last saved or opened project. It
+    dispatches canvas clicks to use cases or to the animator, and
+    reflects algorithm progress in the panel and the canvas.
 
     Args:
         repository: Source of the current graph.
         layout_service: Service that computes initial node positions.
         registry: Registry of available graph algorithms.
+        storage: Storage for saving and loading projects.
         add_node_use_case: Use case for adding a node.
         add_edge_use_case: Use case for adding an edge.
         remove_node_use_case: Use case for removing a node.
@@ -51,6 +66,7 @@ class MainWindow(QMainWindow):
         repository: GraphRepository,
         layout_service: LayoutService,
         registry: AlgorithmRegistry,
+        storage: ProjectStorage,
         add_node_use_case: AddNodeUseCase,
         add_edge_use_case: AddEdgeUseCase,
         remove_node_use_case: RemoveNodeUseCase,
@@ -61,6 +77,7 @@ class MainWindow(QMainWindow):
         self._repository = repository
         self._layout_service = layout_service
         self._registry = registry
+        self._storage = storage
         self._add_node_use_case = add_node_use_case
         self._add_edge_use_case = add_edge_use_case
         self._remove_node_use_case = remove_node_use_case
@@ -73,6 +90,7 @@ class MainWindow(QMainWindow):
         self._drag_node: int | None = None
         self._algorithm_state = AlgorithmState.IDLE
         self._current_interval_ms = BASE_INTERVAL_MS // DEFAULT_SPEED
+        self._current_path: Path | None = None
 
         self.setWindowTitle("GraphAlgoViz")
         self.resize(1100, 700)
@@ -90,6 +108,7 @@ class MainWindow(QMainWindow):
         self._animator.finished.connect(self._on_algorithm_finished)
 
         self._mode_actions: list[QAction] = []
+        self._build_menu()
         self._build_toolbar()
         self._build_status_bar()
         self._build_algorithm_panel()
@@ -118,6 +137,32 @@ class MainWindow(QMainWindow):
         self._pending_edge_source = None
         self._drag_node = None
         self._restore_mode_message()
+
+    def _build_menu(self) -> None:
+        """Create the menu bar with File actions."""
+        file_menu = self.menuBar().addMenu("&File")
+
+        new_action = QAction("&New", self)
+        new_action.setShortcut(QKeySequence.StandardKey.New)
+        new_action.triggered.connect(self._handle_new_project)
+        file_menu.addAction(new_action)
+
+        open_action = QAction("&Open...", self)
+        open_action.setShortcut(QKeySequence.StandardKey.Open)
+        open_action.triggered.connect(self._handle_open_project)
+        file_menu.addAction(open_action)
+
+        file_menu.addSeparator()
+
+        save_action = QAction("&Save", self)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_action.triggered.connect(self._handle_save_project)
+        file_menu.addAction(save_action)
+
+        save_as_action = QAction("Save &As...", self)
+        save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
+        save_as_action.triggered.connect(self._handle_save_project_as)
+        file_menu.addAction(save_as_action)
 
     def _build_toolbar(self) -> None:
         """Create the toolbar with mode-switching actions."""
@@ -188,6 +233,92 @@ class MainWindow(QMainWindow):
         """Update the panel's start node list from the current graph."""
         node_ids = [node.id for node in self._repository.get().nodes()]
         self._panel.set_available_nodes(node_ids)
+
+    def _update_window_title(self) -> None:
+        """Update the window title to reflect the current file."""
+        if self._current_path is None:
+            self.setWindowTitle("GraphAlgoViz")
+        else:
+            self.setWindowTitle(f"GraphAlgoViz - {self._current_path.name}")
+
+    def _reset_algorithm(self) -> None:
+        """Stop and clear any running algorithm."""
+        self._animator.reset()
+        self._algorithm_state = AlgorithmState.IDLE
+        self._panel.set_state(AlgorithmState.IDLE)
+        self._panel.set_info("")
+        self._set_editing_enabled(True)
+
+    def _handle_new_project(self) -> None:
+        """Reset the application to an empty project."""
+        self._repository.clear()
+        self._positions = {}
+        self._current_path = None
+        self._pending_edge_source = None
+        self._drag_node = None
+        self._reset_algorithm()
+        self._sync_available_nodes()
+        self._refresh_canvas()
+        self._update_window_title()
+        self._show_temporary_message("New project")
+
+    def _handle_open_project(self) -> None:
+        """Prompt for a file and load the project from it."""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Open project", "", PROJECT_FILTER
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            graph, positions = self._storage.load(path)
+        except ProjectStorageError as exc:
+            QMessageBox.warning(self, "Open failed", str(exc))
+            return
+        self._repository.save(graph)
+        self._positions = positions
+        self._current_path = path
+        self._pending_edge_source = None
+        self._drag_node = None
+        self._reset_algorithm()
+        self._sync_available_nodes()
+        self._refresh_canvas()
+        self._update_window_title()
+        self._show_temporary_message(f"Opened {path.name}")
+
+    def _handle_save_project(self) -> None:
+        """Save the current project to its path or prompt for one."""
+        if self._current_path is None:
+            self._handle_save_project_as()
+            return
+        self._save_to(self._current_path)
+
+    def _handle_save_project_as(self) -> None:
+        """Prompt for a path and save the current project there."""
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Save project", "", PROJECT_FILTER
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix != PROJECT_SUFFIX:
+            path = path.with_suffix(PROJECT_SUFFIX)
+        self._save_to(path)
+
+    def _save_to(self, path: Path) -> None:
+        """Write the current project to the given path.
+
+        Args:
+            path: Destination file path.
+        """
+        try:
+            self._storage.save(self._repository.get(), self._positions, path)
+        except ProjectStorageError as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
+        self._current_path = path
+        self._update_window_title()
+        self._show_temporary_message(f"Saved to {path.name}")
 
     def _handle_canvas_click(
         self,
@@ -435,11 +566,7 @@ class MainWindow(QMainWindow):
 
     def _on_reset_requested(self) -> None:
         """Discard the current algorithm and return to idle."""
-        self._animator.reset()
-        self._algorithm_state = AlgorithmState.IDLE
-        self._panel.set_state(AlgorithmState.IDLE)
-        self._panel.set_info("")
-        self._set_editing_enabled(True)
+        self._reset_algorithm()
         self._refresh_canvas()
 
     def _on_speed_changed(self, interval_ms: int) -> None:

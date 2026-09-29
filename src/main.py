@@ -14,6 +14,9 @@ from application.use_cases.update_edge import UpdateEdgeUseCase
 from infrastructure.repositories.in_memory_graph_repository import (
     InMemoryGraphRepository,
 )
+from infrastructure.serialization.json_project_storage import (
+    JsonProjectStorage,
+)
 from infrastructure.ui.main_window import MainWindow
 
 
@@ -22,6 +25,7 @@ def main() -> None:
     repository = InMemoryGraphRepository()
     layout_service = LayoutService()
     registry = build_default_registry()
+    storage = JsonProjectStorage()
 
     add_node_use_case = AddNodeUseCase(repository)
     add_edge_use_case = AddEdgeUseCase(repository)
@@ -34,6 +38,7 @@ def main() -> None:
         repository=repository,
         layout_service=layout_service,
         registry=registry,
+        storage=storage,
         add_node_use_case=add_node_use_case,
         add_edge_use_case=add_edge_use_case,
         remove_node_use_case=remove_node_use_case,
