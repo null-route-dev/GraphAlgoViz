@@ -10,7 +10,7 @@ from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
 from application.use_cases.remove_node import RemoveNodeUseCase
-from application.use_cases.set_edge_weight import SetEdgeWeightUseCase
+from application.use_cases.update_edge import UpdateEdgeUseCase
 from infrastructure.repositories.in_memory_graph_repository import (
     InMemoryGraphRepository,
 )
@@ -27,7 +27,7 @@ def main() -> None:
     add_edge_use_case = AddEdgeUseCase(repository)
     remove_node_use_case = RemoveNodeUseCase(repository)
     remove_edge_use_case = RemoveEdgeUseCase(repository)
-    set_edge_weight_use_case = SetEdgeWeightUseCase(repository)
+    update_edge_use_case = UpdateEdgeUseCase(repository)
 
     app = QApplication(sys.argv)
     window = MainWindow(
@@ -38,7 +38,7 @@ def main() -> None:
         add_edge_use_case=add_edge_use_case,
         remove_node_use_case=remove_node_use_case,
         remove_edge_use_case=remove_edge_use_case,
-        set_edge_weight_use_case=set_edge_weight_use_case,
+        update_edge_use_case=update_edge_use_case,
     )
     window.show()
     sys.exit(app.exec())

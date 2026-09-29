@@ -11,12 +11,13 @@ from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
 from application.use_cases.remove_node import RemoveNodeUseCase
-from application.use_cases.set_edge_weight import SetEdgeWeightUseCase
+from application.use_cases.update_edge import UpdateEdgeUseCase
+from domain.entities.edge import Edge
 from domain.interfaces.graph_repository import GraphRepository
 from domain.value_objects.position import Position
 from infrastructure.animation.algorithm_animator import AlgorithmAnimator
 from infrastructure.ui.algorithm_panel import AlgorithmPanel, AlgorithmState
-from infrastructure.ui.dialogs.edge_weight_dialog import EdgeWeightDialog
+from infrastructure.ui.dialogs.edge_attributes_dialog import EdgeAttributesDialog
 from infrastructure.ui.graph_canvas import GraphCanvas
 from infrastructure.ui.interaction_mode import InteractionMode
 
@@ -42,7 +43,7 @@ class MainWindow(QMainWindow):
         add_edge_use_case: Use case for adding an edge.
         remove_node_use_case: Use case for removing a node.
         remove_edge_use_case: Use case for removing an edge.
-        set_edge_weight_use_case: Use case for changing edge weight.
+        update_edge_use_case: Use case for updating edge attributes.
     """
 
     def __init__(
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
         add_edge_use_case: AddEdgeUseCase,
         remove_node_use_case: RemoveNodeUseCase,
         remove_edge_use_case: RemoveEdgeUseCase,
-        set_edge_weight_use_case: SetEdgeWeightUseCase,
+        update_edge_use_case: UpdateEdgeUseCase,
     ) -> None:
         super().__init__()
         self._repository = repository
@@ -64,7 +65,7 @@ class MainWindow(QMainWindow):
         self._add_edge_use_case = add_edge_use_case
         self._remove_node_use_case = remove_node_use_case
         self._remove_edge_use_case = remove_edge_use_case
-        self._set_edge_weight_use_case = set_edge_weight_use_case
+        self._update_edge_use_case = update_edge_use_case
 
         self._positions = layout_service.circular(repository.get())
         self._mode = InteractionMode.SELECT
@@ -214,7 +215,7 @@ class MainWindow(QMainWindow):
             if node_id is not None:
                 self._drag_node = node_id
             elif edge is not None:
-                self._handle_edit_edge_weight(edge)
+                self._handle_edit_edge(edge)
         elif self._mode is InteractionMode.ADD_NODE:
             self._handle_add_node(x, y)
         elif self._mode is InteractionMode.ADD_EDGE:
@@ -259,10 +260,10 @@ class MainWindow(QMainWindow):
         """Add an edge between two consecutively clicked nodes.
 
         The first click stores the source. The second click opens a
-        dialog for the edge weight; if confirmed, the edge is created.
-        Clicking empty space cancels a pending source. Clicking the
-        same node twice also cancels, since self-loops are not part of
-        the editing flow.
+        dialog for the edge attributes; if confirmed, the edge is
+        created. Clicking empty space cancels a pending source.
+        Clicking the same node twice also cancels, since self-loops
+        are not part of the editing flow.
 
         Args:
             node_id: Id of the node under the cursor, or None.
@@ -287,45 +288,57 @@ class MainWindow(QMainWindow):
         source = self._pending_edge_source
         self._pending_edge_source = None
 
-        weight = EdgeWeightDialog.get_weight(parent=self)
-        if weight is None:
+        attributes = EdgeAttributesDialog.get_attributes(parent=self)
+        if attributes is None:
             self._show_temporary_message("Add edge: cancelled")
             return
 
-        self._add_edge_use_case.execute(source=source, target=node_id, weight=weight)
+        self._add_edge_use_case.execute(
+            source=source,
+            target=node_id,
+            weight=attributes.weight,
+            directed=attributes.directed,
+        )
         self._refresh_canvas()
         self._show_temporary_message(
-            f"Added edge {source} -> {node_id} (weight {weight:g})"
+            f"Added edge {source} -> {node_id} (weight {attributes.weight:g})"
         )
 
-    def _handle_edit_edge_weight(self, edge: tuple[int, int]) -> None:
-        """Open a dialog to change the weight of an existing edge.
+    def _handle_edit_edge(self, edge: tuple[int, int]) -> None:
+        """Open a dialog to change the attributes of an existing edge.
 
         Args:
             edge: Endpoints of the edge to edit.
         """
         source, target = edge
-        current = self._find_edge_weight(source, target)
+        current = self._find_edge(source, target)
         if current is None:
             return
-        new_weight = EdgeWeightDialog.get_weight(initial=current, parent=self)
-        if new_weight is None:
-            self._show_temporary_message("Edit weight: cancelled")
+        attributes = EdgeAttributesDialog.get_attributes(
+            initial_weight=current.weight,
+            initial_directed=current.directed,
+            parent=self,
+        )
+        if attributes is None:
+            self._show_temporary_message("Edit edge: cancelled")
             return
-        self._set_edge_weight_use_case.execute(
-            source=source, target=target, weight=new_weight
+        self._update_edge_use_case.execute(
+            source=source,
+            target=target,
+            weight=attributes.weight,
+            directed=attributes.directed,
         )
         self._refresh_canvas()
         self._show_temporary_message(
-            f"Edge {source} -> {target} weight set to {new_weight:g}"
+            f"Edge {source} -> {target} updated (weight {attributes.weight:g})"
         )
 
-    def _find_edge_weight(self, source: int, target: int) -> float | None:
+    def _find_edge(self, source: int, target: int) -> Edge | None:
         for edge in self._repository.get().edges():
             if edge.source == source and edge.target == target:
-                return edge.weight
+                return edge
             if not edge.directed and edge.source == target and edge.target == source:
-                return edge.weight
+                return edge
         return None
 
     def _handle_delete(
