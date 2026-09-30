@@ -42,6 +42,18 @@ PROJECT_SUFFIX = ".gaviz"
 UNSAVED_TITLE = "Unsaved changes"
 UNSAVED_TEXT = "The project has unsaved changes. Save them before continuing?"
 
+APP_NAME = "GraphAlgoViz"
+APP_VERSION = "0.1.0"
+ABOUT_TITLE = f"About {APP_NAME}"
+ABOUT_TEXT = (
+    f"<h3>{APP_NAME} {APP_VERSION}</h3>"
+    "<p>Interactive graph editor with step-by-step algorithm "
+    "visualization.</p>"
+    "<p>Built with Clean Architecture: domain, application, "
+    "infrastructure, presentation.</p>"
+    "<p>Licensed under the MIT License.</p>"
+)
+
 
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and algorithm panel.
@@ -100,7 +112,7 @@ class MainWindow(QMainWindow):
         self._current_path: Path | None = None
         self._dirty = False
 
-        self.setWindowTitle("GraphAlgoViz")
+        self.setWindowTitle(APP_NAME)
         self.resize(1100, 700)
 
         self._canvas = GraphCanvas(
@@ -158,7 +170,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _build_menu(self) -> None:
-        """Create the menu bar with File actions."""
+        """Create the menu bar with File and Help actions."""
         file_menu = self.menuBar().addMenu("&File")
 
         new_action = QAction("&New", self)
@@ -182,6 +194,19 @@ class MainWindow(QMainWindow):
         save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_as_action.triggered.connect(self._handle_save_project_as)
         file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        quit_action = QAction("&Quit", self)
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        help_menu = self.menuBar().addMenu("&Help")
+
+        about_action = QAction(f"&About {APP_NAME}", self)
+        about_action.triggered.connect(self._handle_about)
+        help_menu.addAction(about_action)
 
     def _build_toolbar(self) -> None:
         """Create the toolbar with mode-switching actions."""
@@ -255,7 +280,7 @@ class MainWindow(QMainWindow):
 
     def _update_window_title(self) -> None:
         """Update the window title to reflect file and dirty state."""
-        title = "GraphAlgoViz"
+        title = APP_NAME
         if self._current_path is not None:
             title = f"{title} - {self._current_path.name}"
         if self._dirty:
@@ -303,6 +328,10 @@ class MainWindow(QMainWindow):
         if clicked is cancel_button:
             return False
         return False
+
+    def _handle_about(self) -> None:
+        """Show a modal About dialog."""
+        QMessageBox.about(self, ABOUT_TITLE, ABOUT_TEXT)
 
     def _reset_algorithm(self) -> None:
         """Stop and clear any running algorithm."""
