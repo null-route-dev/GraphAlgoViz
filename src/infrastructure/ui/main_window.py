@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -39,15 +39,22 @@ BASE_INTERVAL_MS = 1000
 PROJECT_FILTER = "GraphAlgoViz project (*.gaviz);;All files (*)"
 PROJECT_SUFFIX = ".gaviz"
 
+UNSAVED_TITLE = "Unsaved changes"
+UNSAVED_TEXT = "The project has unsaved changes. Save them before continuing?"
+
 
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and algorithm panel.
 
     The window owns the current interaction mode, the pending edge
     source, the node being dragged, the node positions, the algorithm
-    state, and the path of the last saved or opened project. It
-    dispatches canvas clicks to use cases or to the animator, and
-    reflects algorithm progress in the panel and the canvas.
+    state, the path of the last saved or opened project, and a dirty
+    flag indicating whether the project has unsaved changes.
+
+    Any mutation of the graph or of node positions marks the project
+    as dirty. Saving, loading, and creating a new project reset the
+    flag. New, Open, and window close ask the user to save first if
+    the project is dirty.
 
     Args:
         repository: Source of the current graph.
@@ -91,6 +98,7 @@ class MainWindow(QMainWindow):
         self._algorithm_state = AlgorithmState.IDLE
         self._current_interval_ms = BASE_INTERVAL_MS // DEFAULT_SPEED
         self._current_path: Path | None = None
+        self._dirty = False
 
         self.setWindowTitle("GraphAlgoViz")
         self.resize(1100, 700)
@@ -137,6 +145,17 @@ class MainWindow(QMainWindow):
         self._pending_edge_source = None
         self._drag_node = None
         self._restore_mode_message()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Confirm unsaved changes before closing the window.
+
+        Args:
+            event: The close event.
+        """
+        if self._confirm_discard_changes():
+            event.accept()
+        else:
+            event.ignore()
 
     def _build_menu(self) -> None:
         """Create the menu bar with File actions."""
@@ -235,11 +254,55 @@ class MainWindow(QMainWindow):
         self._panel.set_available_nodes(node_ids)
 
     def _update_window_title(self) -> None:
-        """Update the window title to reflect the current file."""
-        if self._current_path is None:
-            self.setWindowTitle("GraphAlgoViz")
-        else:
-            self.setWindowTitle(f"GraphAlgoViz - {self._current_path.name}")
+        """Update the window title to reflect file and dirty state."""
+        title = "GraphAlgoViz"
+        if self._current_path is not None:
+            title = f"{title} - {self._current_path.name}"
+        if self._dirty:
+            title = f"{title} *"
+        self.setWindowTitle(title)
+
+    def _mark_dirty(self) -> None:
+        """Mark the project as having unsaved changes."""
+        if not self._dirty:
+            self._dirty = True
+            self._update_window_title()
+
+    def _clear_dirty(self) -> None:
+        """Mark the project as clean after a successful save or load."""
+        if self._dirty:
+            self._dirty = False
+            self._update_window_title()
+
+    def _confirm_discard_changes(self) -> bool:
+        """Ask the user what to do with unsaved changes.
+
+        Returns:
+            True if it is safe to proceed (no changes, or the user
+            saved them, or the user explicitly discarded them).
+            False if the user cancelled.
+        """
+        if not self._dirty:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle(UNSAVED_TITLE)
+        box.setText(UNSAVED_TEXT)
+        box.setIcon(QMessageBox.Icon.Warning)
+        save_button = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        discard_button = box.addButton(
+            "Discard", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_button:
+            return self._handle_save_project()
+        if clicked is discard_button:
+            return True
+        if clicked is cancel_button:
+            return False
+        return False
 
     def _reset_algorithm(self) -> None:
         """Stop and clear any running algorithm."""
@@ -251,6 +314,8 @@ class MainWindow(QMainWindow):
 
     def _handle_new_project(self) -> None:
         """Reset the application to an empty project."""
+        if not self._confirm_discard_changes():
+            return
         self._repository.clear()
         self._positions = {}
         self._current_path = None
@@ -259,11 +324,14 @@ class MainWindow(QMainWindow):
         self._reset_algorithm()
         self._sync_available_nodes()
         self._refresh_canvas()
+        self._clear_dirty()
         self._update_window_title()
         self._show_temporary_message("New project")
 
     def _handle_open_project(self) -> None:
         """Prompt for a file and load the project from it."""
+        if not self._confirm_discard_changes():
+            return
         path_str, _ = QFileDialog.getOpenFileName(
             self, "Open project", "", PROJECT_FILTER
         )
@@ -283,42 +351,57 @@ class MainWindow(QMainWindow):
         self._reset_algorithm()
         self._sync_available_nodes()
         self._refresh_canvas()
+        self._clear_dirty()
         self._update_window_title()
         self._show_temporary_message(f"Opened {path.name}")
 
-    def _handle_save_project(self) -> None:
-        """Save the current project to its path or prompt for one."""
-        if self._current_path is None:
-            self._handle_save_project_as()
-            return
-        self._save_to(self._current_path)
+    def _handle_save_project(self) -> bool:
+        """Save the current project to its path or prompt for one.
 
-    def _handle_save_project_as(self) -> None:
-        """Prompt for a path and save the current project there."""
+        Returns:
+            True if the project was saved, False if the user
+            cancelled or the save failed.
+        """
+        if self._current_path is None:
+            return self._handle_save_project_as()
+        return self._save_to(self._current_path)
+
+    def _handle_save_project_as(self) -> bool:
+        """Prompt for a path and save the current project there.
+
+        Returns:
+            True if the project was saved, False if the user
+            cancelled or the save failed.
+        """
         path_str, _ = QFileDialog.getSaveFileName(
             self, "Save project", "", PROJECT_FILTER
         )
         if not path_str:
-            return
+            return False
         path = Path(path_str)
         if path.suffix != PROJECT_SUFFIX:
             path = path.with_suffix(PROJECT_SUFFIX)
-        self._save_to(path)
+        return self._save_to(path)
 
-    def _save_to(self, path: Path) -> None:
+    def _save_to(self, path: Path) -> bool:
         """Write the current project to the given path.
 
         Args:
             path: Destination file path.
+
+        Returns:
+            True if the project was saved, False otherwise.
         """
         try:
             self._storage.save(self._repository.get(), self._positions, path)
         except ProjectStorageError as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
-            return
+            return False
         self._current_path = path
+        self._clear_dirty()
         self._update_window_title()
         self._show_temporary_message(f"Saved to {path.name}")
+        return True
 
     def _handle_canvas_click(
         self,
@@ -366,6 +449,7 @@ class MainWindow(QMainWindow):
         if self._drag_node is None:
             return
         self._positions[self._drag_node] = Position(x=x, y=y)
+        self._mark_dirty()
         self._refresh_canvas()
 
     def _handle_canvas_drag_end(self) -> None:
@@ -383,6 +467,7 @@ class MainWindow(QMainWindow):
         new_id = graph.next_id()
         node = self._add_node_use_case.execute(node_id=new_id)
         self._positions[node.id] = Position(x=x, y=y)
+        self._mark_dirty()
         self._sync_available_nodes()
         self._refresh_canvas()
         self._show_temporary_message(f"Added node {node.id}")
@@ -430,6 +515,7 @@ class MainWindow(QMainWindow):
             weight=attributes.weight,
             directed=attributes.directed,
         )
+        self._mark_dirty()
         self._refresh_canvas()
         self._show_temporary_message(
             f"Added edge {source} -> {node_id} (weight {attributes.weight:g})"
@@ -459,6 +545,7 @@ class MainWindow(QMainWindow):
             weight=attributes.weight,
             directed=attributes.directed,
         )
+        self._mark_dirty()
         self._refresh_canvas()
         self._show_temporary_message(
             f"Edge {source} -> {target} updated (weight {attributes.weight:g})"
@@ -505,6 +592,7 @@ class MainWindow(QMainWindow):
         self._positions.pop(node_id, None)
         if self._pending_edge_source == node_id:
             self._pending_edge_source = None
+        self._mark_dirty()
         self._sync_available_nodes()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted node {node_id}")
@@ -517,6 +605,7 @@ class MainWindow(QMainWindow):
         """
         source, target = edge
         self._remove_edge_use_case.execute(source=source, target=target)
+        self._mark_dirty()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted edge {source} -> {target}")
 
