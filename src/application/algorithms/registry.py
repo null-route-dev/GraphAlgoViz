@@ -7,7 +7,9 @@ from application.algorithms.base import BaseAlgorithm
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
+from application.algorithms.greedy_coloring import GreedyColoring
 from application.algorithms.prim_mst import PrimMST
+from application.algorithms.topological_sort import TopologicalSort
 from domain.entities.graph import Graph
 
 AlgorithmFactory = Callable[[Graph, int], BaseAlgorithm]
@@ -115,7 +117,8 @@ def build_default_registry() -> AlgorithmRegistry:
 
     Returns:
         A new registry containing depth-first search, breadth-first
-        search, Dijkstra, and Prim's minimum spanning tree.
+        search, Dijkstra, Prim's minimum spanning tree, greedy
+        coloring, and topological sort.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -160,6 +163,29 @@ def build_default_registry() -> AlgorithmRegistry:
                 "the cheapest edge connecting a new node to the tree."
             ),
             factory=PrimMST,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="coloring",
+            display_name="Greedy Coloring",
+            description=(
+                "Colors nodes so that no two adjacent nodes share a "
+                "color, picking the smallest available color for each."
+            ),
+            factory=GreedyColoring,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="toposort",
+            display_name="Topological Sort",
+            description=(
+                "Orders nodes of a directed acyclic graph so that "
+                "every directed edge goes from an earlier node to a "
+                "later one."
+            ),
+            factory=TopologicalSort,
         )
     )
     return registry

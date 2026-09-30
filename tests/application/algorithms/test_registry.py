@@ -5,12 +5,14 @@ import pytest
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
+from application.algorithms.greedy_coloring import GreedyColoring
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.registry import (
     AlgorithmInfo,
     AlgorithmRegistry,
     build_default_registry,
 )
+from application.algorithms.topological_sort import TopologicalSort
 from domain.entities.edge import Edge
 from domain.entities.graph import Graph
 from domain.entities.node import Node
@@ -117,6 +119,8 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "bfs",
         "dijkstra",
         "prim",
+        "coloring",
+        "toposort",
     ]
 
 
@@ -138,3 +142,5 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("bfs", graph, 1), BreadthFirstSearch)
     assert isinstance(registry.create("dijkstra", graph, 1), Dijkstra)
     assert isinstance(registry.create("prim", graph, 1), PrimMST)
+    assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
+    assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
