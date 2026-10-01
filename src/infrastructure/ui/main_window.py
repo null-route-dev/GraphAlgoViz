@@ -712,6 +712,7 @@ class MainWindow(QMainWindow):
             current_node=result.current,
             highlighted_edges=result.tree_edges,
             labels=result.labels,
+            node_colors=result.node_colors,
         )
 
     def _on_algorithm_finished(self) -> None:

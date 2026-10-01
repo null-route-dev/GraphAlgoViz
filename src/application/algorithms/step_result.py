@@ -20,6 +20,7 @@ class StepResult:
         frontier: Ids waiting to be processed (stack or queue order).
         tree_edges: Edges forming the traversal tree.
         labels: Optional per-node text labels (for example, distances).
+        node_colors: Optional per-node fill colors as hex strings.
         info: Human-readable description of this step.
     """
 
@@ -28,4 +29,5 @@ class StepResult:
     frontier: tuple[int, ...] = ()
     tree_edges: frozenset[tuple[int, int]] = frozenset()
     labels: dict[int, str] = field(default_factory=dict)
+    node_colors: dict[int, str] = field(default_factory=dict)
     info: str = ""

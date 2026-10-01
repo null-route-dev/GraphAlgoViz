@@ -2,7 +2,7 @@
 
 import pytest
 
-from application.algorithms.greedy_coloring import GreedyColoring
+from application.algorithms.greedy_coloring import PALETTE, GreedyColoring
 from application.algorithms.step_result import StepResult
 from domain.entities.edge import Edge
 from domain.entities.graph import Graph
@@ -135,3 +135,40 @@ def test_isolated_node_gets_first_color() -> None:
     final = steps[-1]
 
     assert final.labels == {1: "1", 2: "1"}
+
+
+def test_node_colors_use_palette() -> None:
+    """Every assigned color comes from the palette."""
+    steps = run_to_completion(GreedyColoring(build_chain(), start_node_id=1))
+    final = steps[-1]
+
+    for color in final.node_colors.values():
+        assert color in PALETTE
+
+
+def test_chain_alternates_between_first_two_palette_colors() -> None:
+    """A chain uses palette color 0 and 1 in alternating order."""
+    steps = run_to_completion(GreedyColoring(build_chain(), start_node_id=1))
+    final = steps[-1]
+
+    assert final.node_colors[1] == PALETTE[0]
+    assert final.node_colors[2] == PALETTE[1]
+    assert final.node_colors[3] == PALETTE[0]
+
+
+def test_triangle_uses_first_three_palette_colors() -> None:
+    """A triangle uses the first three palette entries."""
+    steps = run_to_completion(GreedyColoring(build_triangle(), start_node_id=1))
+    final = steps[-1]
+
+    assert final.node_colors[1] == PALETTE[0]
+    assert final.node_colors[2] == PALETTE[1]
+    assert final.node_colors[3] == PALETTE[2]
+
+
+def test_node_colors_and_labels_stay_in_sync() -> None:
+    """Every labeled node also has a fill color."""
+    steps = run_to_completion(GreedyColoring(build_star(), start_node_id=1))
+    final = steps[-1]
+
+    assert set(final.node_colors.keys()) == set(final.labels.keys())

@@ -4,6 +4,17 @@ from application.algorithms.base import BaseAlgorithm
 from application.algorithms.step_result import StepResult
 from domain.entities.graph import Graph
 
+PALETTE: tuple[str, ...] = (
+    "#4e79a7",
+    "#f28e2b",
+    "#59a14f",
+    "#b07aa1",
+    "#76b7b2",
+    "#edc948",
+    "#9c755f",
+    "#bab0ac",
+)
+
 
 class GreedyColoring(BaseAlgorithm):
     """Greedy graph coloring.
@@ -22,6 +33,10 @@ class GreedyColoring(BaseAlgorithm):
     the order they appear in the graph. This produces a deterministic
     result that does not depend on dictionary iteration order beyond
     what the graph itself exposes.
+
+    Color numbers are mapped to hex colors from PALETTE, cycling if
+    more colors are needed than the palette provides. The mapping is
+    stable: the same color number always produces the same hex color.
 
     For directed graphs, neighbors are only those reachable along an
     outgoing edge. Two nodes connected by a single directed edge may
@@ -64,7 +79,8 @@ class GreedyColoring(BaseAlgorithm):
 
         Returns:
             A snapshot showing colored nodes, the node just colored,
-            the remaining nodes, and per-node color numbers.
+            the remaining nodes, per-node color numbers, and per-node
+            fill colors.
 
         Raises:
             RuntimeError: If the algorithm has already finished.
@@ -94,5 +110,8 @@ class GreedyColoring(BaseAlgorithm):
             frontier=tuple(self._order[self._index :]),
             tree_edges=frozenset(),
             labels={nid: str(c) for nid, c in self._colors.items()},
+            node_colors={
+                nid: PALETTE[(c - 1) % len(PALETTE)] for nid, c in self._colors.items()
+            },
             info=f"Colored node {node_id} with color {color}",
         )

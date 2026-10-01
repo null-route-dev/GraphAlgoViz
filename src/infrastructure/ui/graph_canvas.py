@@ -25,6 +25,7 @@ COLOR_CURRENT = "#d62728"
 COLOR_EDGE = "#888888"
 
 ARROW_MUTATION_SCALE = 14
+CURRENT_BORDER_WIDTH = 2.5
 
 
 class GraphCanvas(FigureCanvasQTAgg):
@@ -35,6 +36,13 @@ class GraphCanvas(FigureCanvasQTAgg):
     own the graph or its positions — it reads them on every draw and
     remembers the last drawn state only to resolve clicks to node ids
     and edges.
+
+    Node fill colors come from the algorithm's step result, if any.
+    When a node has no explicit color, the canvas falls back to its
+    default palette: orange for visited nodes, red for the current
+    node, blue otherwise. A node that has an explicit color keeps it
+    even when it is the current node; the current node is highlighted
+    with a thicker red border instead.
 
     Directed edges are drawn with an arrow head near the target node.
     The line is shortened by NODE_VISUAL_RADIUS at the target end so
@@ -102,6 +110,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         current_node: int | None = None,
         highlighted_edges: frozenset[tuple[int, int]] = frozenset(),
         labels: dict[int, str] | None = None,
+        node_colors: dict[int, str] | None = None,
     ) -> None:
         """Render the graph on the canvas.
 
@@ -112,6 +121,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             current_node: Id of the node to draw as the current one.
             highlighted_edges: Edges to emphasize.
             labels: Optional per-node text labels.
+            node_colors: Optional per-node fill colors as hex strings.
         """
         self._last_graph = graph
         self._last_positions = dict(positions)
@@ -124,6 +134,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             highlighted_nodes,
             current_node,
             labels or {},
+            node_colors or {},
         )
         self.draw()
 
@@ -217,25 +228,26 @@ class GraphCanvas(FigureCanvasQTAgg):
         highlighted: frozenset[int],
         current: int | None,
         labels: dict[int, str],
+        node_colors: dict[int, str],
     ) -> None:
         for node in graph.nodes():
             if node.id not in positions:
                 continue
             position = positions[node.id]
-            if node.id == current:
-                color = COLOR_CURRENT
-            elif node.id in highlighted:
-                color = COLOR_HIGHLIGHTED
-            else:
-                color = COLOR_DEFAULT
+            fill_color = self._resolve_fill_color(
+                node.id, highlighted, current, node_colors
+            )
+            is_current = node.id == current
+            border_color = COLOR_CURRENT if is_current else "black"
+            border_width = CURRENT_BORDER_WIDTH if is_current else 1.0
             self._axes.plot(
                 position.x,
                 position.y,
                 marker="o",
                 markersize=22,
-                markerfacecolor=color,
-                markeredgecolor="black",
-                markeredgewidth=1.0,
+                markerfacecolor=fill_color,
+                markeredgecolor=border_color,
+                markeredgewidth=border_width,
                 zorder=2,
             )
             self._axes.text(
@@ -259,6 +271,21 @@ class GraphCanvas(FigureCanvasQTAgg):
                     fontsize=9,
                     zorder=3,
                 )
+
+    @staticmethod
+    def _resolve_fill_color(
+        node_id: int,
+        highlighted: frozenset[int],
+        current: int | None,
+        node_colors: dict[int, str],
+    ) -> str:
+        if node_id in node_colors:
+            return node_colors[node_id]
+        if node_id == current:
+            return COLOR_CURRENT
+        if node_id in highlighted:
+            return COLOR_HIGHLIGHTED
+        return COLOR_DEFAULT
 
     def _handle_press(self, event: Any) -> None:
         """Handle a left mouse press.
