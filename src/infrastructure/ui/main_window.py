@@ -7,6 +7,7 @@ from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QToolBar,
@@ -67,6 +68,9 @@ class MainWindow(QMainWindow):
     as dirty. Saving, loading, and creating a new project reset the
     flag. New, Open, and window close ask the user to save first if
     the project is dirty.
+
+    The status bar shows the current mode on the left and a permanent
+    graph summary (node and edge counts) on the right.
 
     Args:
         repository: Source of the current graph.
@@ -134,6 +138,7 @@ class MainWindow(QMainWindow):
         self._build_algorithm_panel()
         self._refresh_canvas()
         self._sync_available_nodes()
+        self._update_graph_stats()
 
     @property
     def mode(self) -> InteractionMode:
@@ -233,8 +238,11 @@ class MainWindow(QMainWindow):
             self._mode_actions.append(action)
 
     def _build_status_bar(self) -> None:
-        """Create the status bar and show the initial mode."""
+        """Create the status bar with mode and graph stats."""
         self._status_bar = self.statusBar()
+        self._stats_label = QLabel("", self)
+        self._stats_label.setContentsMargins(0, 0, 8, 0)
+        self._status_bar.addPermanentWidget(self._stats_label)
         self._restore_mode_message()
 
     def _build_algorithm_panel(self) -> None:
@@ -277,6 +285,13 @@ class MainWindow(QMainWindow):
         """Update the panel's start node list from the current graph."""
         node_ids = [node.id for node in self._repository.get().nodes()]
         self._panel.set_available_nodes(node_ids)
+
+    def _update_graph_stats(self) -> None:
+        """Update the permanent graph summary in the status bar."""
+        graph = self._repository.get()
+        nodes = graph.node_count
+        edges = graph.edge_count
+        self._stats_label.setText(f"Nodes: {nodes}   Edges: {edges}")
 
     def _update_window_title(self) -> None:
         """Update the window title to reflect file and dirty state."""
@@ -353,6 +368,7 @@ class MainWindow(QMainWindow):
         self._reset_algorithm()
         self._sync_available_nodes()
         self._refresh_canvas()
+        self._update_graph_stats()
         self._clear_dirty()
         self._update_window_title()
         self._show_temporary_message("New project")
@@ -380,6 +396,7 @@ class MainWindow(QMainWindow):
         self._reset_algorithm()
         self._sync_available_nodes()
         self._refresh_canvas()
+        self._update_graph_stats()
         self._clear_dirty()
         self._update_window_title()
         self._show_temporary_message(f"Opened {path.name}")
@@ -498,6 +515,7 @@ class MainWindow(QMainWindow):
         self._positions[node.id] = Position(x=x, y=y)
         self._mark_dirty()
         self._sync_available_nodes()
+        self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(f"Added node {node.id}")
 
@@ -545,6 +563,7 @@ class MainWindow(QMainWindow):
             directed=attributes.directed,
         )
         self._mark_dirty()
+        self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(
             f"Added edge {source} -> {node_id} (weight {attributes.weight:g})"
@@ -623,6 +642,7 @@ class MainWindow(QMainWindow):
             self._pending_edge_source = None
         self._mark_dirty()
         self._sync_available_nodes()
+        self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted node {node_id}")
 
@@ -635,6 +655,7 @@ class MainWindow(QMainWindow):
         source, target = edge
         self._remove_edge_use_case.execute(source=source, target=target)
         self._mark_dirty()
+        self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted edge {source} -> {target}")
 
