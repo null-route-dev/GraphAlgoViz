@@ -7,6 +7,7 @@ from typing import Any
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.patches import FancyArrowPatch
+from PySide6.QtCore import QTimer
 
 from domain.entities.graph import Graph
 from domain.value_objects.position import Position
@@ -27,6 +28,9 @@ COLOR_EDGE = "#888888"
 ARROW_MUTATION_SCALE = 14
 CURRENT_BORDER_WIDTH = 2.5
 
+TRANSITION_FRAME_MS = 20
+TRANSITION_STEP = 0.18
+
 
 class GraphCanvas(FigureCanvasQTAgg):
     """A matplotlib canvas displaying a graph.
@@ -44,25 +48,23 @@ class GraphCanvas(FigureCanvasQTAgg):
     even when it is the current node; the current node is highlighted
     with a thicker red border instead.
 
+    Color changes are animated. When a new draw request arrives with
+    different fill colors, the canvas interpolates each node's color
+    over several frames. If a new request arrives while a transition
+    is running, the current transition is finalized immediately and a
+    new one starts from the final state. This keeps the visual result
+    predictable at any animation speed.
+
     Directed edges are drawn with an arrow head near the target node.
     The line is shortened by NODE_VISUAL_RADIUS at the target end so
     that the arrow head is not hidden under the node marker. Hit
-    testing always uses the full segment between node centers, so
-    clicking near a node still resolves to the node (node hits take
-    priority over edge hits).
+    testing always uses the full segment between node centers.
 
-    The canvas reports three kinds of mouse activity:
-
-    - a left button press, with the coordinates, the id of the node
-      under the cursor (or None), and the edge under the cursor as a
-      (source, target) pair (or None). A node hit takes priority over
-      an edge hit at the same point;
-    - mouse motion while the left button is held down over a node that
-      was under the cursor at press time;
-    - the release of the left button.
-
-    The canvas does not interpret these events. Deciding whether a
-    drag is meaningful, and in which mode, is the caller's concern.
+    The canvas reports three kinds of mouse activity: a left button
+    press with coordinates and the node/edge under the cursor, mouse
+    motion while the left button is held down over a node, and the
+    release of the left button. Interpretation is the caller's
+    responsibility.
 
     Args:
         parent: Optional Qt parent widget.
@@ -85,11 +87,27 @@ class GraphCanvas(FigureCanvasQTAgg):
         if parent is not None:
             self.setParent(parent)  # type: ignore[arg-type]
         self._configure_axes()
+
         self._on_click = on_click
         self._on_drag_move = on_drag_move
         self._on_drag_end = on_drag_end
+
         self._last_graph: Graph | None = None
         self._last_positions: dict[int, Position] = {}
+        self._last_highlighted_nodes: frozenset[int] = frozenset()
+        self._last_current_node: int | None = None
+        self._last_highlighted_edges: frozenset[tuple[int, int]] = frozenset()
+        self._last_labels: dict[int, str] = {}
+
+        self._colors_start: dict[int, str] = {}
+        self._colors_target: dict[int, str] = {}
+        self._colors_displayed: dict[int, str] = {}
+        self._transition_progress = 1.0
+
+        self._transition_timer = QTimer(self)
+        self._transition_timer.setInterval(TRANSITION_FRAME_MS)
+        self._transition_timer.timeout.connect(self._on_transition_tick)
+
         self._pressed_node: int | None = None
         self.mpl_connect("button_press_event", self._handle_press)
         self.mpl_connect("motion_notify_event", self._handle_motion)
@@ -112,7 +130,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         labels: dict[int, str] | None = None,
         node_colors: dict[int, str] | None = None,
     ) -> None:
-        """Render the graph on the canvas.
+        """Render the graph on the canvas with animated color changes.
 
         Args:
             graph: The graph to render.
@@ -125,16 +143,79 @@ class GraphCanvas(FigureCanvasQTAgg):
         """
         self._last_graph = graph
         self._last_positions = dict(positions)
+        self._last_highlighted_nodes = highlighted_nodes
+        self._last_current_node = current_node
+        self._last_highlighted_edges = highlighted_edges
+        self._last_labels = dict(labels or {})
+
+        new_targets: dict[int, str] = {}
+        for node in graph.nodes():
+            if node.id not in positions:
+                continue
+            new_targets[node.id] = self._resolve_fill_color(
+                node.id,
+                highlighted_nodes,
+                current_node,
+                node_colors or {},
+            )
+
+        if new_targets == self._colors_target and self._transition_timer.isActive():
+            return
+
+        self._transition_timer.stop()
+        if self._colors_target:
+            self._colors_displayed = dict(self._colors_target)
+
+        self._colors_start = (
+            dict(self._colors_displayed)
+            if self._colors_displayed
+            else dict(new_targets)
+        )
+        self._colors_target = new_targets
+
+        if self._colors_start == self._colors_target:
+            self._colors_displayed = dict(new_targets)
+            self._transition_progress = 1.0
+            self._redraw()
+            return
+
+        self._transition_progress = 0.0
+        self._redraw()
+        self._transition_timer.start()
+
+    def _on_transition_tick(self) -> None:
+        """Advance the color transition by one frame."""
+        self._transition_progress = min(
+            1.0, self._transition_progress + TRANSITION_STEP
+        )
+        t = self._transition_progress
+        new_displayed: dict[int, str] = {}
+        for node_id, target in self._colors_target.items():
+            start = self._colors_start.get(node_id, target)
+            new_displayed[node_id] = _lerp_color(start, target, t)
+        self._colors_displayed = new_displayed
+        if t >= 1.0:
+            self._transition_timer.stop()
+        self._redraw()
+
+    def _redraw(self) -> None:
+        """Redraw the canvas using the current displayed colors."""
+        if self._last_graph is None:
+            return
         self._axes.clear()
         self._configure_axes()
-        self._draw_edges(graph, positions, highlighted_edges)
+        self._draw_edges(
+            self._last_graph,
+            self._last_positions,
+            self._last_highlighted_edges,
+        )
         self._draw_nodes(
-            graph,
-            positions,
-            highlighted_nodes,
-            current_node,
-            labels or {},
-            node_colors or {},
+            self._last_graph,
+            self._last_positions,
+            self._last_highlighted_nodes,
+            self._last_current_node,
+            self._last_labels,
+            self._colors_displayed,
         )
         self.draw()
 
@@ -234,8 +315,9 @@ class GraphCanvas(FigureCanvasQTAgg):
             if node.id not in positions:
                 continue
             position = positions[node.id]
-            fill_color = self._resolve_fill_color(
-                node.id, highlighted, current, node_colors
+            fill_color = node_colors.get(
+                node.id,
+                self._resolve_fill_color(node.id, highlighted, current, node_colors),
             )
             is_current = node.id == current
             border_color = COLOR_CURRENT if is_current else "black"
@@ -392,6 +474,31 @@ class GraphCanvas(FigureCanvasQTAgg):
                 best_distance = distance
                 best_edge = (edge.source, edge.target)
         return best_edge
+
+
+def _lerp_color(start: str, end: str, t: float) -> str:
+    """Interpolate between two hex colors.
+
+    Args:
+        start: Hex color string, for example "#1f77b4".
+        end: Hex color string of the same format.
+        t: Interpolation parameter in [0.0, 1.0]. 0 returns start,
+            1 returns end, values in between produce a blend.
+
+    Returns:
+        A hex color string representing the interpolated color.
+    """
+    clamped = max(0.0, min(1.0, t))
+    sr = int(start[1:3], 16)
+    sg = int(start[3:5], 16)
+    sb = int(start[5:7], 16)
+    er = int(end[1:3], 16)
+    eg = int(end[3:5], 16)
+    eb = int(end[5:7], 16)
+    r = round(sr + (er - sr) * clamped)
+    g = round(sg + (eg - sg) * clamped)
+    b = round(sb + (eb - sb) * clamped)
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def _point_to_segment_distance(
