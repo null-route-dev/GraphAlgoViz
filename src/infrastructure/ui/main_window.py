@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QToolBar,
 )
@@ -69,8 +70,15 @@ class MainWindow(QMainWindow):
     flag. New, Open, and window close ask the user to save first if
     the project is dirty.
 
+    Editing is locked while an algorithm is loaded, in any state
+    except IDLE. This keeps the algorithm's history consistent with
+    the graph it was computed against. Reset returns to IDLE and
+    unlocks editing.
+
     The status bar shows the current mode on the left and a permanent
-    graph summary (node and edge counts) on the right.
+    graph summary (node and edge counts) on the right. The algorithm
+    panel is docked on the right and can be hidden or restored from
+    the View menu.
 
     Args:
         repository: Source of the current graph.
@@ -132,6 +140,7 @@ class MainWindow(QMainWindow):
         self._animator.finished.connect(self._on_algorithm_finished)
 
         self._mode_actions: list[QAction] = []
+        self._view_menu: QMenu | None = None
         self._build_menu()
         self._build_toolbar()
         self._build_status_bar()
@@ -139,6 +148,7 @@ class MainWindow(QMainWindow):
         self._refresh_canvas()
         self._sync_available_nodes()
         self._update_graph_stats()
+        self._update_step_availability()
 
     @property
     def mode(self) -> InteractionMode:
@@ -175,7 +185,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _build_menu(self) -> None:
-        """Create the menu bar with File and Help actions."""
+        """Create the menu bar with File, View, and Help actions."""
         file_menu = self.menuBar().addMenu("&File")
 
         new_action = QAction("&New", self)
@@ -206,6 +216,8 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        self._view_menu = self.menuBar().addMenu("&View")
 
         help_menu = self.menuBar().addMenu("&Help")
 
@@ -251,6 +263,7 @@ class MainWindow(QMainWindow):
         self._panel.run_requested.connect(self._on_run_requested)
         self._panel.pause_requested.connect(self._on_pause_requested)
         self._panel.step_requested.connect(self._on_step_requested)
+        self._panel.step_back_requested.connect(self._on_step_back_requested)
         self._panel.reset_requested.connect(self._on_reset_requested)
         self._panel.speed_changed.connect(self._on_speed_changed)
 
@@ -258,6 +271,8 @@ class MainWindow(QMainWindow):
         dock.setWidget(self._panel)
         dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        if self._view_menu is not None:
+            self._view_menu.addAction(dock.toggleViewAction())
 
     def _restore_mode_message(self) -> None:
         """Show the current mode in the status bar."""
@@ -292,6 +307,13 @@ class MainWindow(QMainWindow):
         nodes = graph.node_count
         edges = graph.edge_count
         self._stats_label.setText(f"Nodes: {nodes}   Edges: {edges}")
+
+    def _update_step_availability(self) -> None:
+        """Refresh the panel's step buttons from the animator state."""
+        self._panel.set_step_availability(
+            can_step_back=self._animator.can_step_back,
+            can_step_forward=self._animator.can_step_forward,
+        )
 
     def _update_window_title(self) -> None:
         """Update the window title to reflect file and dirty state."""
@@ -355,6 +377,7 @@ class MainWindow(QMainWindow):
         self._panel.set_state(AlgorithmState.IDLE)
         self._panel.set_info("")
         self._set_editing_enabled(True)
+        self._update_step_availability()
 
     def _handle_new_project(self) -> None:
         """Reset the application to an empty project."""
@@ -458,7 +481,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Dispatch a canvas click according to the active mode.
 
-        Clicks are ignored while an algorithm is running or paused.
+        Clicks are ignored while any algorithm is loaded, since the
+        graph must remain consistent with the algorithm's history.
 
         Args:
             x: Horizontal coordinate of the click in the unit square.
@@ -466,10 +490,7 @@ class MainWindow(QMainWindow):
             node_id: Id of the node under the cursor, or None.
             edge: Endpoints of the edge under the cursor, or None.
         """
-        if self._algorithm_state in (
-            AlgorithmState.RUNNING,
-            AlgorithmState.PAUSED,
-        ):
+        if self._algorithm_state is not AlgorithmState.IDLE:
             return
         if self._mode is InteractionMode.SELECT:
             if node_id is not None:
@@ -670,11 +691,15 @@ class MainWindow(QMainWindow):
             algorithm_id: Identifier of the algorithm to run.
             start_node_id: Id of the node to start from.
         """
-        if self._algorithm_state is AlgorithmState.PAUSED:
+        if self._algorithm_state in (
+            AlgorithmState.PAUSED,
+            AlgorithmState.FINISHED,
+        ):
             self._animator.resume()
             self._algorithm_state = AlgorithmState.RUNNING
             self._panel.set_state(AlgorithmState.RUNNING)
             self._set_editing_enabled(False)
+            self._update_step_availability()
             return
 
         graph = self._repository.get()
@@ -692,16 +717,41 @@ class MainWindow(QMainWindow):
         self._panel.set_state(AlgorithmState.RUNNING)
         self._panel.set_info("")
         self._animator.start(algorithm, self._current_interval_ms)
+        self._update_step_availability()
 
     def _on_pause_requested(self) -> None:
         """Pause the running algorithm."""
         self._animator.pause()
         self._algorithm_state = AlgorithmState.PAUSED
         self._panel.set_state(AlgorithmState.PAUSED)
+        self._update_step_availability()
 
     def _on_step_requested(self) -> None:
-        """Advance the paused algorithm by one step."""
-        self._animator.step_once()
+        """Advance the paused or finished algorithm by one step."""
+        if self._algorithm_state not in (
+            AlgorithmState.PAUSED,
+            AlgorithmState.FINISHED,
+        ):
+            return
+        self._animator.step_forward()
+        if self._animator.can_step_forward:
+            self._algorithm_state = AlgorithmState.PAUSED
+        else:
+            self._algorithm_state = AlgorithmState.FINISHED
+        self._panel.set_state(self._algorithm_state)
+        self._update_step_availability()
+
+    def _on_step_back_requested(self) -> None:
+        """Return to the previous state in the algorithm's history."""
+        if self._algorithm_state not in (
+            AlgorithmState.PAUSED,
+            AlgorithmState.FINISHED,
+        ):
+            return
+        self._animator.step_back()
+        self._algorithm_state = AlgorithmState.PAUSED
+        self._panel.set_state(AlgorithmState.PAUSED)
+        self._update_step_availability()
 
     def _on_reset_requested(self) -> None:
         """Discard the current algorithm and return to idle."""
@@ -735,12 +785,17 @@ class MainWindow(QMainWindow):
             labels=result.labels,
             node_colors=result.node_colors,
         )
+        self._update_step_availability()
 
     def _on_algorithm_finished(self) -> None:
-        """Switch to the finished state when the algorithm completes."""
+        """Switch to the finished state when the algorithm completes.
+
+        Editing stays locked: the user must Reset to modify the graph,
+        since the algorithm's history refers to the current graph.
+        """
         self._algorithm_state = AlgorithmState.FINISHED
         self._panel.set_state(AlgorithmState.FINISHED)
-        self._set_editing_enabled(True)
+        self._update_step_availability()
 
     def _refresh_canvas(self) -> None:
         """Redraw the canvas from the current graph and positions."""

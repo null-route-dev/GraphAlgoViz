@@ -38,7 +38,7 @@ class AlgorithmPanel(QWidget):
     The panel emits signals describing user intent. It does not call
     use cases or animate anything itself — that is the main window's
     responsibility. The panel reflects state set by the caller through
-    ``set_state`` and ``set_available_nodes``.
+    ``set_state`` and ``set_step_availability``.
 
     Args:
         registry: Source of available algorithm metadata.
@@ -48,6 +48,7 @@ class AlgorithmPanel(QWidget):
     run_requested = Signal(str, int)
     pause_requested = Signal()
     step_requested = Signal()
+    step_back_requested = Signal()
     reset_requested = Signal()
     speed_changed = Signal(int)
 
@@ -60,6 +61,8 @@ class AlgorithmPanel(QWidget):
         self._registry = registry
         self._state = AlgorithmState.IDLE
         self._has_nodes = False
+        self._can_step_back = False
+        self._can_step_forward = False
         self._build_ui()
         self._populate_algorithms()
         self._update_buttons()
@@ -71,6 +74,22 @@ class AlgorithmPanel(QWidget):
             state: The state to display.
         """
         self._state = state
+        self._update_buttons()
+
+    def set_step_availability(
+        self,
+        can_step_back: bool,
+        can_step_forward: bool,
+    ) -> None:
+        """Update which step buttons are usable.
+
+        Args:
+            can_step_back: True if a previous state is available.
+            can_step_forward: True if a next state is available or
+                can still be computed.
+        """
+        self._can_step_back = can_step_back
+        self._can_step_forward = can_step_forward
         self._update_buttons()
 
     def set_available_nodes(self, node_ids: list[int]) -> None:
@@ -112,11 +131,15 @@ class AlgorithmPanel(QWidget):
         buttons = QHBoxLayout()
         self._run_button = QPushButton("Run", self)
         self._pause_button = QPushButton("Pause", self)
+        self._step_back_button = QPushButton("Back", self)
+        self._step_back_button.setToolTip("Step back")
         self._step_button = QPushButton("Step", self)
+        self._step_button.setToolTip("Step forward")
         self._reset_button = QPushButton("Reset", self)
         for button in (
             self._run_button,
             self._pause_button,
+            self._step_back_button,
             self._step_button,
             self._reset_button,
         ):
@@ -125,6 +148,7 @@ class AlgorithmPanel(QWidget):
 
         self._run_button.clicked.connect(self._emit_run)
         self._pause_button.clicked.connect(self._emit_pause)
+        self._step_back_button.clicked.connect(self._emit_step_back)
         self._step_button.clicked.connect(self._emit_step)
         self._reset_button.clicked.connect(self._emit_reset)
 
@@ -151,14 +175,17 @@ class AlgorithmPanel(QWidget):
     def _update_buttons(self) -> None:
         state = self._state
         has_nodes = self._has_nodes
-        run_enabled = has_nodes and state in (
-            AlgorithmState.IDLE,
+        is_loaded = state in (
             AlgorithmState.PAUSED,
             AlgorithmState.FINISHED,
         )
+        run_enabled = (state is AlgorithmState.IDLE and has_nodes) or (
+            is_loaded and self._can_step_forward
+        )
         self._run_button.setEnabled(run_enabled)
         self._pause_button.setEnabled(state is AlgorithmState.RUNNING)
-        self._step_button.setEnabled(state is AlgorithmState.PAUSED)
+        self._step_back_button.setEnabled(is_loaded and self._can_step_back)
+        self._step_button.setEnabled(is_loaded and self._can_step_forward)
         self._reset_button.setEnabled(state is not AlgorithmState.IDLE)
 
     def _emit_run(self) -> None:
@@ -175,6 +202,9 @@ class AlgorithmPanel(QWidget):
 
     def _emit_step(self) -> None:
         self.step_requested.emit()
+
+    def _emit_step_back(self) -> None:
+        self.step_back_requested.emit()
 
     def _emit_reset(self) -> None:
         self.reset_requested.emit()
