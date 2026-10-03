@@ -18,6 +18,7 @@ from infrastructure.serialization.json_project_storage import (
     JsonProjectStorage,
 )
 from infrastructure.ui.main_window import MainWindow
+from infrastructure.ui.theme import apply_theme
 
 
 def main() -> None:
@@ -34,6 +35,7 @@ def main() -> None:
     update_edge_use_case = UpdateEdgeUseCase(repository)
 
     app = QApplication(sys.argv)
+    apply_theme(app, dark=True)
     window = MainWindow(
         repository=repository,
         layout_service=layout_service,

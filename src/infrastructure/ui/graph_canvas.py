@@ -23,13 +23,26 @@ NODE_VISUAL_RADIUS = 0.025
 COLOR_DEFAULT = "#1f77b4"
 COLOR_HIGHLIGHTED = "#ff7f0e"
 COLOR_CURRENT = "#d62728"
-COLOR_EDGE = "#888888"
 
 ARROW_MUTATION_SCALE = 14
 CURRENT_BORDER_WIDTH = 2.5
 
 TRANSITION_FRAME_MS = 20
 TRANSITION_STEP = 0.18
+
+DARK_BG = "#1e1e1e"
+DARK_NODE_BORDER = "#cccccc"
+DARK_EDGE = "#aaaaaa"
+DARK_NODE_LABEL = "#ffffff"
+DARK_WEIGHT_TEXT = "#ffffff"
+DARK_WEIGHT_BG = "#2b2b2b"
+
+LIGHT_BG = "#ffffff"
+LIGHT_NODE_BORDER = "#000000"
+LIGHT_EDGE = "#888888"
+LIGHT_NODE_LABEL = "#000000"
+LIGHT_WEIGHT_TEXT = "#000000"
+LIGHT_WEIGHT_BG = "#ffffff"
 
 
 class GraphCanvas(FigureCanvasQTAgg):
@@ -47,6 +60,11 @@ class GraphCanvas(FigureCanvasQTAgg):
     node, blue otherwise. A node that has an explicit color keeps it
     even when it is the current node; the current node is highlighted
     with a thicker red border instead.
+
+    The canvas supports a dark and a light theme. Switching the theme
+    updates the figure background, node borders, edge color, and text
+    colors, and redraws immediately. Theme switching does not affect
+    positions, colors assigned by algorithms, or the current selection.
 
     Color changes are animated. When a new draw request arrives with
     different fill colors, the canvas interpolates each node's color
@@ -72,6 +90,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         on_drag_move: Optional callback invoked on mouse motion while
             the left button is held down after a press over a node.
         on_drag_end: Optional callback invoked on left button release.
+        dark: Whether to start with the dark theme.
     """
 
     def __init__(
@@ -80,12 +99,22 @@ class GraphCanvas(FigureCanvasQTAgg):
         on_click: ClickCallback | None = None,
         on_drag_move: DragMoveCallback | None = None,
         on_drag_end: DragEndCallback | None = None,
+        dark: bool = True,
     ) -> None:
         self._figure = Figure(figsize=(6, 6), tight_layout=True)
         self._axes = self._figure.add_subplot(111)
         super().__init__(self._figure)
         if parent is not None:
             self.setParent(parent)  # type: ignore[arg-type]
+
+        self._dark = dark
+        self._bg_color = DARK_BG if dark else LIGHT_BG
+        self._node_border_color = DARK_NODE_BORDER if dark else LIGHT_NODE_BORDER
+        self._edge_color = DARK_EDGE if dark else LIGHT_EDGE
+        self._node_label_color = DARK_NODE_LABEL if dark else LIGHT_NODE_LABEL
+        self._weight_text_color = DARK_WEIGHT_TEXT if dark else LIGHT_WEIGHT_TEXT
+        self._weight_bg_color = DARK_WEIGHT_BG if dark else LIGHT_WEIGHT_BG
+
         self._configure_axes()
 
         self._on_click = on_click
@@ -113,12 +142,32 @@ class GraphCanvas(FigureCanvasQTAgg):
         self.mpl_connect("motion_notify_event", self._handle_motion)
         self.mpl_connect("button_release_event", self._handle_release)
 
+    def set_dark(self, dark: bool) -> None:
+        """Switch between the dark and light themes.
+
+        Args:
+            dark: True for the dark theme, False for the light theme.
+        """
+        if dark == self._dark:
+            return
+        self._dark = dark
+        self._bg_color = DARK_BG if dark else LIGHT_BG
+        self._node_border_color = DARK_NODE_BORDER if dark else LIGHT_NODE_BORDER
+        self._edge_color = DARK_EDGE if dark else LIGHT_EDGE
+        self._node_label_color = DARK_NODE_LABEL if dark else LIGHT_NODE_LABEL
+        self._weight_text_color = DARK_WEIGHT_TEXT if dark else LIGHT_WEIGHT_TEXT
+        self._weight_bg_color = DARK_WEIGHT_BG if dark else LIGHT_WEIGHT_BG
+        self._figure.patch.set_facecolor(self._bg_color)
+        self._redraw()
+
     def _configure_axes(self) -> None:
         """Set up axes limits and appearance."""
         self._axes.set_xlim(0.0, 1.0)
         self._axes.set_ylim(0.0, 1.0)
         self._axes.set_aspect("equal")
         self._axes.axis("off")
+        self._figure.patch.set_facecolor(self._bg_color)
+        self._axes.set_facecolor(self._bg_color)
 
     def draw_graph(
         self,
@@ -201,6 +250,9 @@ class GraphCanvas(FigureCanvasQTAgg):
     def _redraw(self) -> None:
         """Redraw the canvas using the current displayed colors."""
         if self._last_graph is None:
+            self._axes.clear()
+            self._configure_axes()
+            self.draw()
             return
         self._axes.clear()
         self._configure_axes()
@@ -234,7 +286,7 @@ class GraphCanvas(FigureCanvasQTAgg):
                 edge.target,
                 edge.source,
             ) in highlighted
-            color = COLOR_CURRENT if is_highlighted else COLOR_EDGE
+            color = COLOR_CURRENT if is_highlighted else self._edge_color
             width = 2.5 if is_highlighted else 1.0
             if edge.directed:
                 self._draw_directed_edge(start, end, color, width)
@@ -292,11 +344,11 @@ class GraphCanvas(FigureCanvasQTAgg):
             f"{weight:g}",
             ha="center",
             va="center",
-            color="black",
+            color=self._weight_text_color,
             fontsize=8,
             bbox={
                 "boxstyle": "round,pad=0.15",
-                "facecolor": "white",
+                "facecolor": self._weight_bg_color,
                 "edgecolor": "none",
             },
             zorder=1.5,
@@ -320,7 +372,7 @@ class GraphCanvas(FigureCanvasQTAgg):
                 self._resolve_fill_color(node.id, highlighted, current, node_colors),
             )
             is_current = node.id == current
-            border_color = COLOR_CURRENT if is_current else "black"
+            border_color = COLOR_CURRENT if is_current else self._node_border_color
             border_width = CURRENT_BORDER_WIDTH if is_current else 1.0
             self._axes.plot(
                 position.x,
@@ -349,7 +401,7 @@ class GraphCanvas(FigureCanvasQTAgg):
                     labels[node.id],
                     ha="center",
                     va="bottom",
-                    color="black",
+                    color=self._node_label_color,
                     fontsize=9,
                     zorder=3,
                 )

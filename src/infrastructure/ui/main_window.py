@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QDockWidget,
     QFileDialog,
     QLabel,
@@ -33,6 +34,7 @@ from infrastructure.ui.dialogs.edge_attributes_dialog import (
 )
 from infrastructure.ui.graph_canvas import GraphCanvas
 from infrastructure.ui.interaction_mode import InteractionMode
+from infrastructure.ui.theme import apply_theme
 
 MESSAGE_TIMEOUT_MS = 2000
 DEFAULT_SPEED = 5
@@ -56,14 +58,16 @@ ABOUT_TEXT = (
     "<p>Licensed under the MIT License.</p>"
 )
 
+DEFAULT_DARK = True
+
 
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and algorithm panel.
 
     The window owns the current interaction mode, the pending edge
     source, the node being dragged, the node positions, the algorithm
-    state, the path of the last saved or opened project, and a dirty
-    flag indicating whether the project has unsaved changes.
+    state, the path of the last saved or opened project, a dirty flag,
+    and the current theme.
 
     Any mutation of the graph or of node positions marks the project
     as dirty. Saving, loading, and creating a new project reset the
@@ -78,7 +82,7 @@ class MainWindow(QMainWindow):
     The status bar shows the current mode on the left and a permanent
     graph summary (node and edge counts) on the right. The algorithm
     panel is docked on the right and can be hidden or restored from
-    the View menu.
+    the View menu. The View menu also toggles the theme.
 
     Args:
         repository: Source of the current graph.
@@ -90,6 +94,7 @@ class MainWindow(QMainWindow):
         remove_node_use_case: Use case for removing a node.
         remove_edge_use_case: Use case for removing an edge.
         update_edge_use_case: Use case for updating edge attributes.
+        dark: Whether to start with the dark theme.
     """
 
     def __init__(
@@ -103,6 +108,7 @@ class MainWindow(QMainWindow):
         remove_node_use_case: RemoveNodeUseCase,
         remove_edge_use_case: RemoveEdgeUseCase,
         update_edge_use_case: UpdateEdgeUseCase,
+        dark: bool = DEFAULT_DARK,
     ) -> None:
         super().__init__()
         self._repository = repository
@@ -123,6 +129,7 @@ class MainWindow(QMainWindow):
         self._current_interval_ms = BASE_INTERVAL_MS // DEFAULT_SPEED
         self._current_path: Path | None = None
         self._dirty = False
+        self._dark = dark
 
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 700)
@@ -132,6 +139,7 @@ class MainWindow(QMainWindow):
             on_click=self._handle_canvas_click,
             on_drag_move=self._handle_canvas_drag_move,
             on_drag_end=self._handle_canvas_drag_end,
+            dark=dark,
         )
         self.setCentralWidget(self._canvas)
 
@@ -145,6 +153,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_status_bar()
         self._build_algorithm_panel()
+        self._add_theme_action()
         self._refresh_canvas()
         self._sync_available_nodes()
         self._update_graph_stats()
@@ -273,6 +282,30 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         if self._view_menu is not None:
             self._view_menu.addAction(dock.toggleViewAction())
+
+    def _add_theme_action(self) -> None:
+        """Add the theme toggle to the View menu."""
+        if self._view_menu is None:
+            return
+        self._view_menu.addSeparator()
+        self._dark_theme_action = QAction("Dark theme", self)
+        self._dark_theme_action.setCheckable(True)
+        self._dark_theme_action.setChecked(self._dark)
+        self._dark_theme_action.triggered.connect(self._handle_toggle_theme)
+        self._view_menu.addAction(self._dark_theme_action)
+
+    def _handle_toggle_theme(self, checked: bool) -> None:
+        """Switch between dark and light themes.
+
+        Args:
+            checked: True for the dark theme, False for the light one.
+        """
+        self._dark = checked
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_theme(app, checked)
+        self._canvas.set_dark(checked)
+        self._refresh_canvas()
 
     def _restore_mode_message(self) -> None:
         """Show the current mode in the status bar."""
