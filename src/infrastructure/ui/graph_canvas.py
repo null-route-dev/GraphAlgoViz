@@ -9,6 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import FancyArrowPatch
 from PySide6.QtCore import QTimer
 
+from domain.entities.edge import Edge
 from domain.entities.graph import Graph
 from domain.value_objects.position import Position
 
@@ -29,6 +30,8 @@ CURRENT_BORDER_WIDTH = 2.5
 
 TRANSITION_FRAME_MS = 20
 TRANSITION_STEP = 0.18
+
+ARC_SPACING = 0.18
 
 DARK_BG = "#1e1e1e"
 DARK_NODE_BORDER = "#cccccc"
@@ -60,6 +63,13 @@ class GraphCanvas(FigureCanvasQTAgg):
     node, blue otherwise. A node that has an explicit color keeps it
     even when it is the current node; the current node is highlighted
     with a thicker red border instead.
+
+    Edges between the same pair of nodes are drawn as arcs. When only
+    one edge connects two nodes, it is drawn as a straight line. When
+    several edges share the same pair of endpoints, they are bent by
+    different amounts so that they do not overlap. Directed and
+    undirected edges share the same slot allocation, so a directed
+    edge and its reverse remain visually distinct.
 
     The canvas supports a dark and a light theme. Switching the theme
     updates the figure background, node borders, edge color, and text
@@ -277,51 +287,59 @@ class GraphCanvas(FigureCanvasQTAgg):
         positions: dict[int, Position],
         highlighted: frozenset[tuple[int, int]],
     ) -> None:
-        for edge in graph.edges():
-            if edge.source not in positions or edge.target not in positions:
-                continue
-            start = positions[edge.source]
-            end = positions[edge.target]
-            is_highlighted = (edge.source, edge.target) in highlighted or (
-                edge.target,
-                edge.source,
-            ) in highlighted
-            color = COLOR_CURRENT if is_highlighted else self._edge_color
-            width = 2.5 if is_highlighted else 1.0
-            if edge.directed:
-                self._draw_directed_edge(start, end, color, width)
-            else:
-                self._draw_undirected_edge(start, end, color, width)
-            self._draw_edge_weight(edge.weight, start, end)
+        groups = _group_edges_by_endpoints(graph.edges())
+        for key, edges in groups.items():
+            total = len(edges)
+            for index, edge in enumerate(edges):
+                if edge.source not in positions or edge.target not in positions:
+                    continue
+                start = positions[edge.source]
+                end = positions[edge.target]
+                is_highlighted = (edge.source, edge.target) in highlighted or (
+                    edge.target,
+                    edge.source,
+                ) in highlighted
+                color = COLOR_CURRENT if is_highlighted else self._edge_color
+                width = 2.5 if is_highlighted else 1.0
+                rad = _effective_rad(edge, key, _arc_rad_for_index(index, total))
+                self._draw_edge(start, end, color, width, edge.directed, rad)
+                self._draw_edge_weight(edge.weight, start, end, rad)
 
-    def _draw_undirected_edge(
+    def _draw_edge(
         self,
         start: Position,
         end: Position,
         color: str,
         width: float,
+        directed: bool,
+        rad: float,
     ) -> None:
-        self._axes.plot(
-            [start.x, end.x],
-            [start.y, end.y],
-            color=color,
-            linewidth=width,
-            zorder=1,
-        )
+        if rad == 0.0 and not directed:
+            self._axes.plot(
+                [start.x, end.x],
+                [start.y, end.y],
+                color=color,
+                linewidth=width,
+                zorder=1,
+            )
+            return
 
-    def _draw_directed_edge(
-        self,
-        start: Position,
-        end: Position,
-        color: str,
-        width: float,
-    ) -> None:
-        shortened_end = _shorten_towards(start, end, NODE_VISUAL_RADIUS)
+        if directed:
+            shortened_end = _shorten_towards(start, end, NODE_VISUAL_RADIUS)
+            tail = (start.x, start.y)
+            head = (shortened_end.x, shortened_end.y)
+            style = "->"
+        else:
+            tail = (start.x, start.y)
+            head = (end.x, end.y)
+            style = "-"
+
         arrow = FancyArrowPatch(
-            (start.x, start.y),
-            (shortened_end.x, shortened_end.y),
-            arrowstyle="->",
+            tail,
+            head,
+            arrowstyle=style,
             mutation_scale=ARROW_MUTATION_SCALE,
+            connectionstyle=f"arc3,rad={rad}",
             color=color,
             linewidth=width,
             shrinkA=0.0,
@@ -335,9 +353,9 @@ class GraphCanvas(FigureCanvasQTAgg):
         weight: float,
         start: Position,
         end: Position,
+        rad: float,
     ) -> None:
-        mid_x = (start.x + end.x) / 2.0
-        mid_y = (start.y + end.y) / 2.0
+        mid_x, mid_y = _arc_midpoint(start, end, rad)
         self._axes.text(
             mid_x,
             mid_y,
@@ -500,7 +518,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         An edge counts as hit if the point lies within EDGE_HIT_RADIUS
         of the segment connecting its endpoints. The segment used for
         hit testing always runs between node centers, regardless of
-        whether the edge is drawn with a shortened arrow head.
+        whether the edge is drawn as a straight line or an arc.
 
         The closest edge wins when several are within range.
 
@@ -526,6 +544,104 @@ class GraphCanvas(FigureCanvasQTAgg):
                 best_distance = distance
                 best_edge = (edge.source, edge.target)
         return best_edge
+
+
+def _group_edges_by_endpoints(
+    edges: list[Edge],
+) -> dict[tuple[int, int], list[Edge]]:
+    """Group edges by their unordered pair of endpoints.
+
+    Args:
+        edges: The edges to group.
+
+    Returns:
+        A mapping from the sorted endpoint pair to the list of edges
+        connecting those endpoints, in the original order.
+    """
+    groups: dict[tuple[int, int], list[Edge]] = {}
+    for edge in edges:
+        key = (min(edge.source, edge.target), max(edge.source, edge.target))
+        groups.setdefault(key, []).append(edge)
+    return groups
+
+
+def _arc_rad_for_index(index: int, total: int) -> float:
+    """Return the arc curvature for the given slot in a group.
+
+    The slots are centered around zero: a group of one gets zero, a
+    group of three gets -ARC_SPACING, 0, and +ARC_SPACING, and so on.
+
+    Args:
+        index: Zero-based index of the edge within its group.
+        total: Number of edges in the group.
+
+    Returns:
+        The signed curvature value for the edge.
+    """
+    if total <= 1:
+        return 0.0
+    return ARC_SPACING * (index - (total - 1) / 2.0)
+
+
+def _effective_rad(
+    edge: Edge,
+    key: tuple[int, int],
+    rad: float,
+) -> float:
+    """Return the curvature to use when drawing the edge.
+
+    The curvature is defined relative to the canonical direction from
+    the smaller node id to the larger one. If the edge is oriented
+    against that direction, the sign is inverted so that two opposite
+    edges between the same nodes bend to opposite sides.
+
+    Args:
+        edge: The edge being drawn.
+        key: The sorted endpoint pair shared by the group.
+        rad: The curvature for the edge's slot, relative to the
+            canonical direction.
+
+    Returns:
+        The signed curvature to pass to the drawing routine.
+    """
+    if edge.source == key[0]:
+        return rad
+    return -rad
+
+
+def _arc_midpoint(
+    start: Position,
+    end: Position,
+    rad: float,
+) -> tuple[float, float]:
+    """Return the midpoint of an arc3 curve between two positions.
+
+    For a quadratic Bezier curve produced by matplotlib's arc3
+    connection style, the point at parameter t=0.5 lies halfway
+    between the segment midpoint and the control point. The control
+    point is offset perpendicular to the segment by rad * length.
+
+    Args:
+        start: The start position of the edge.
+        end: The end position of the edge.
+        rad: The curvature value passed to arc3.
+
+    Returns:
+        A tuple (x, y) for the label position.
+    """
+    dx = end.x - start.x
+    dy = end.y - start.y
+    length = math.hypot(dx, dy)
+    mid_x = (start.x + end.x) / 2.0
+    mid_y = (start.y + end.y) / 2.0
+    if length == 0.0 or rad == 0.0:
+        return mid_x, mid_y
+    perp_x = -dy / length
+    perp_y = dx / length
+    return (
+        mid_x + 0.5 * rad * perp_x * length,
+        mid_y + 0.5 * rad * perp_y * length,
+    )
 
 
 def _lerp_color(start: str, end: str, t: float) -> str:
