@@ -28,6 +28,7 @@ from domain.entities.edge import Edge
 from domain.interfaces.graph_repository import GraphRepository
 from domain.value_objects.position import Position
 from infrastructure.animation.algorithm_animator import AlgorithmAnimator
+from infrastructure.settings import AppSettings
 from infrastructure.ui.algorithm_panel import AlgorithmPanel, AlgorithmState
 from infrastructure.ui.dialogs.edge_attributes_dialog import (
     EdgeAttributesDialog,
@@ -90,22 +91,29 @@ class MainWindow(QMainWindow):
     number keys 1 through 4. The shortcuts are active only while this
     window has focus, so they do not interfere with dialogs.
 
+    The theme is persisted through AppSettings. Toggling it from the
+    View menu applies the change immediately and saves the preference
+    for the next run.
+
     The status bar shows the current mode on the left and a permanent
     graph summary (node and edge counts) on the right. The algorithm
     panel is docked on the right and can be hidden or restored from
-    the View menu. The View menu also toggles the theme.
+    the View menu.
 
     Args:
         repository: Source of the current graph.
         layout_service: Service that computes initial node positions.
         registry: Registry of available graph algorithms.
         storage: Storage for saving and loading projects.
+        settings: Persisted application settings.
         add_node_use_case: Use case for adding a node.
         add_edge_use_case: Use case for adding an edge.
         remove_node_use_case: Use case for removing a node.
         remove_edge_use_case: Use case for removing an edge.
         update_edge_use_case: Use case for updating edge attributes.
-        dark: Whether to start with the dark theme.
+        dark: Whether to start with the dark theme. Callers usually
+            pass the value from ``settings.dark_theme()`` so that the
+            window matches the theme already applied to QApplication.
     """
 
     def __init__(
@@ -114,6 +122,7 @@ class MainWindow(QMainWindow):
         layout_service: LayoutService,
         registry: AlgorithmRegistry,
         storage: ProjectStorage,
+        settings: AppSettings,
         add_node_use_case: AddNodeUseCase,
         add_edge_use_case: AddEdgeUseCase,
         remove_node_use_case: RemoveNodeUseCase,
@@ -126,6 +135,7 @@ class MainWindow(QMainWindow):
         self._layout_service = layout_service
         self._registry = registry
         self._storage = storage
+        self._settings = settings
         self._add_node_use_case = add_node_use_case
         self._add_edge_use_case = add_edge_use_case
         self._remove_node_use_case = remove_node_use_case
@@ -316,7 +326,7 @@ class MainWindow(QMainWindow):
         self._view_menu.addAction(self._dark_theme_action)
 
     def _handle_toggle_theme(self, checked: bool) -> None:
-        """Switch between dark and light themes.
+        """Switch between dark and light themes and persist the choice.
 
         Args:
             checked: True for the dark theme, False for the light one.
@@ -326,6 +336,7 @@ class MainWindow(QMainWindow):
         if isinstance(app, QApplication):
             apply_theme(app, checked)
         self._canvas.set_dark(checked)
+        self._settings.set_dark_theme(checked)
         self._refresh_canvas()
 
     def _restore_mode_message(self) -> None:

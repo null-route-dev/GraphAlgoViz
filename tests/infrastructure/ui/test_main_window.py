@@ -1,8 +1,10 @@
 """Tests for the main application window."""
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QCloseEvent, QKeySequence
 
 from application.algorithms.registry import build_default_registry
@@ -18,6 +20,7 @@ from infrastructure.repositories.in_memory_graph_repository import (
 from infrastructure.serialization.json_project_storage import (
     JsonProjectStorage,
 )
+from infrastructure.settings import AppSettings
 from infrastructure.ui.interaction_mode import InteractionMode
 from infrastructure.ui.main_window import (
     APP_NAME,
@@ -27,7 +30,15 @@ from infrastructure.ui.main_window import (
 
 
 @pytest.fixture
-def window(qtbot: object) -> Iterator[MainWindow]:
+def settings(tmp_path: Path) -> Iterator[AppSettings]:
+    """Return AppSettings backed by a temporary file."""
+    qsettings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    yield AppSettings(qsettings)
+    qsettings.clear()
+
+
+@pytest.fixture
+def window(qtbot: object, settings: AppSettings) -> Iterator[MainWindow]:
     """Return a fully wired MainWindow for testing.
 
     The window is closed in teardown. Before closing, the dirty flag
@@ -51,6 +62,7 @@ def window(qtbot: object) -> Iterator[MainWindow]:
         layout_service=layout_service,
         registry=registry,
         storage=storage,
+        settings=settings,
         add_node_use_case=add_node,
         add_edge_use_case=add_edge,
         remove_node_use_case=remove_node,
@@ -189,3 +201,21 @@ def test_mode_actions_have_shortcuts(window: MainWindow) -> None:
                 break
         assert expected_mode is not None
         assert action.shortcut() == QKeySequence(MODE_SHORTCUTS[expected_mode])
+
+
+def test_toggle_theme_persists_setting(
+    window: MainWindow,
+    settings: AppSettings,
+) -> None:
+    """Toggling the theme saves the choice through AppSettings."""
+    settings.set_dark_theme(True)
+    window._handle_toggle_theme(False)
+
+    assert settings.dark_theme() is False
+
+
+def test_toggle_theme_updates_flag(window: MainWindow) -> None:
+    """Toggling the theme updates the window's internal flag."""
+    window._handle_toggle_theme(False)
+
+    assert window._dark is False

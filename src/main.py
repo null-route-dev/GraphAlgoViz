@@ -17,12 +17,16 @@ from infrastructure.repositories.in_memory_graph_repository import (
 from infrastructure.serialization.json_project_storage import (
     JsonProjectStorage,
 )
+from infrastructure.settings import AppSettings
 from infrastructure.ui.main_window import MainWindow
 from infrastructure.ui.theme import apply_theme
 
 
 def main() -> None:
     """Assemble dependencies and start the application."""
+    settings = AppSettings()
+    dark = settings.dark_theme()
+
     repository = InMemoryGraphRepository()
     layout_service = LayoutService()
     registry = build_default_registry()
@@ -35,17 +39,19 @@ def main() -> None:
     update_edge_use_case = UpdateEdgeUseCase(repository)
 
     app = QApplication(sys.argv)
-    apply_theme(app, dark=True)
+    apply_theme(app, dark)
     window = MainWindow(
         repository=repository,
         layout_service=layout_service,
         registry=registry,
         storage=storage,
+        settings=settings,
         add_node_use_case=add_node_use_case,
         add_edge_use_case=add_edge_use_case,
         remove_node_use_case=remove_node_use_case,
         remove_edge_use_case=remove_edge_use_case,
         update_edge_use_case=update_edge_use_case,
+        dark=dark,
     )
     window.show()
     sys.exit(app.exec())
