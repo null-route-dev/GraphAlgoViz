@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 
 import pytest
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence
 
 from application.algorithms.registry import build_default_registry
 from application.services.layout_service import LayoutService
@@ -19,7 +19,11 @@ from infrastructure.serialization.json_project_storage import (
     JsonProjectStorage,
 )
 from infrastructure.ui.interaction_mode import InteractionMode
-from infrastructure.ui.main_window import APP_NAME, MainWindow
+from infrastructure.ui.main_window import (
+    APP_NAME,
+    MODE_SHORTCUTS,
+    MainWindow,
+)
 
 
 @pytest.fixture
@@ -167,3 +171,21 @@ def test_editing_locked_while_algorithm_loaded(window: MainWindow) -> None:
     window._handle_canvas_click(0.5, 0.5, node_id=1, edge=None)
 
     assert window._drag_node is None
+
+
+def test_mode_shortcuts_map_is_complete() -> None:
+    """Every interaction mode has a shortcut assigned."""
+    for mode in InteractionMode:
+        assert mode in MODE_SHORTCUTS
+
+
+def test_mode_actions_have_shortcuts(window: MainWindow) -> None:
+    """Each mode action carries the shortcut from MODE_SHORTCUTS."""
+    for action in window._mode_actions:
+        expected_mode = None
+        for mode in InteractionMode:
+            if action.text() == mode.display_name:
+                expected_mode = mode
+                break
+        assert expected_mode is not None
+        assert action.shortcut() == QKeySequence(MODE_SHORTCUTS[expected_mode])

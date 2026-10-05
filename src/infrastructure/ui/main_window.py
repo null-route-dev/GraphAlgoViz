@@ -60,6 +60,13 @@ ABOUT_TEXT = (
 
 DEFAULT_DARK = True
 
+MODE_SHORTCUTS: dict[InteractionMode, str] = {
+    InteractionMode.SELECT: "1",
+    InteractionMode.ADD_NODE: "2",
+    InteractionMode.ADD_EDGE: "3",
+    InteractionMode.DELETE: "4",
+}
+
 
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and algorithm panel.
@@ -78,6 +85,10 @@ class MainWindow(QMainWindow):
     except IDLE. This keeps the algorithm's history consistent with
     the graph it was computed against. Reset returns to IDLE and
     unlocks editing.
+
+    Interaction modes can be switched from the toolbar or with the
+    number keys 1 through 4. The shortcuts are active only while this
+    window has focus, so they do not interfere with dialogs.
 
     The status bar shows the current mode on the left and a permanent
     graph summary (node and edge counts) on the right. The algorithm
@@ -235,7 +246,13 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _build_toolbar(self) -> None:
-        """Create the toolbar with mode-switching actions."""
+        """Create the toolbar with mode-switching actions.
+
+        Each mode action is assigned a number-key shortcut defined in
+        MODE_SHORTCUTS. The shortcut context is the window, so the
+        keys work only while this window is active and do not interfere
+        with text fields in dialogs.
+        """
         toolbar = QToolBar("Tools", self)
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
@@ -253,6 +270,10 @@ class MainWindow(QMainWindow):
             action = QAction(mode.display_name, self)
             action.setCheckable(True)
             action.setChecked(mode is self._mode)
+            shortcut = MODE_SHORTCUTS.get(mode)
+            if shortcut is not None:
+                action.setShortcut(QKeySequence(shortcut))
+                action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             action.triggered.connect(lambda checked=False, m=mode: self.set_mode(m))
             group.addAction(action)
             toolbar.addAction(action)
