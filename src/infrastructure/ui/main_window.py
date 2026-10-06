@@ -35,6 +35,7 @@ from infrastructure.ui.dialogs.edge_attributes_dialog import (
 )
 from infrastructure.ui.graph_canvas import GraphCanvas
 from infrastructure.ui.interaction_mode import InteractionMode
+from infrastructure.ui.matrix_view import MatrixView
 from infrastructure.ui.theme import apply_theme
 
 MESSAGE_TIMEOUT_MS = 2000
@@ -70,7 +71,7 @@ MODE_SHORTCUTS: dict[InteractionMode, str] = {
 
 
 class MainWindow(QMainWindow):
-    """Top-level window hosting the canvas, toolbar, and algorithm panel.
+    """Top-level window hosting the canvas, toolbar, and docks.
 
     The window owns the current interaction mode, the pending edge
     source, the node being dragged, the node positions, the algorithm
@@ -89,16 +90,14 @@ class MainWindow(QMainWindow):
 
     Interaction modes can be switched from the toolbar or with the
     number keys 1 through 4. The shortcuts are active only while this
-    window has focus, so they do not interfere with dialogs.
+    window has focus.
 
-    The theme is persisted through AppSettings. Toggling it from the
-    View menu applies the change immediately and saves the preference
-    for the next run.
+    The theme is persisted through AppSettings.
 
-    The status bar shows the current mode on the left and a permanent
-    graph summary (node and edge counts) on the right. The algorithm
-    panel is docked on the right and can be hidden or restored from
-    the View menu.
+    Two docks are available from the View menu: the algorithm panel
+    on the right and the matrix view at the bottom. The matrix dock is
+    shown automatically when the running algorithm produces matrix
+    data, such as Floyd-Warshall, and hidden again on reset.
 
     Args:
         repository: Source of the current graph.
@@ -111,9 +110,7 @@ class MainWindow(QMainWindow):
         remove_node_use_case: Use case for removing a node.
         remove_edge_use_case: Use case for removing an edge.
         update_edge_use_case: Use case for updating edge attributes.
-        dark: Whether to start with the dark theme. Callers usually
-            pass the value from ``settings.dark_theme()`` so that the
-            window matches the theme already applied to QApplication.
+        dark: Whether to start with the dark theme.
     """
 
     def __init__(
@@ -174,6 +171,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_status_bar()
         self._build_algorithm_panel()
+        self._build_matrix_panel()
         self._add_theme_action()
         self._refresh_canvas()
         self._sync_available_nodes()
@@ -256,13 +254,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _build_toolbar(self) -> None:
-        """Create the toolbar with mode-switching actions.
-
-        Each mode action is assigned a number-key shortcut defined in
-        MODE_SHORTCUTS. The shortcut context is the window, so the
-        keys work only while this window is active and do not interfere
-        with text fields in dialogs.
-        """
+        """Create the toolbar with mode-switching actions."""
         toolbar = QToolBar("Tools", self)
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
@@ -307,12 +299,25 @@ class MainWindow(QMainWindow):
         self._panel.reset_requested.connect(self._on_reset_requested)
         self._panel.speed_changed.connect(self._on_speed_changed)
 
-        dock = QDockWidget("Algorithm", self)
-        dock.setWidget(self._panel)
-        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self._algorithm_dock = QDockWidget("Algorithm", self)
+        self._algorithm_dock.setWidget(self._panel)
+        self._algorithm_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._algorithm_dock)
         if self._view_menu is not None:
-            self._view_menu.addAction(dock.toggleViewAction())
+            self._view_menu.addAction(self._algorithm_dock.toggleViewAction())
+
+    def _build_matrix_panel(self) -> None:
+        """Create the matrix view and dock it at the bottom."""
+        self._matrix_view = MatrixView(self)
+        self._matrix_dock = QDockWidget("Matrix", self)
+        self._matrix_dock.setWidget(self._matrix_view)
+        self._matrix_dock.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._matrix_dock)
+        self._matrix_dock.hide()
+        if self._view_menu is not None:
+            self._view_menu.addAction(self._matrix_dock.toggleViewAction())
 
     def _add_theme_action(self) -> None:
         """Add the theme toggle to the View menu."""
@@ -443,6 +448,8 @@ class MainWindow(QMainWindow):
         self._panel.set_info("")
         self._set_editing_enabled(True)
         self._update_step_availability()
+        self._matrix_view.clear_matrix()
+        self._matrix_dock.hide()
 
     def _handle_new_project(self) -> None:
         """Reset the application to an empty project."""
@@ -781,6 +788,7 @@ class MainWindow(QMainWindow):
         self._algorithm_state = AlgorithmState.RUNNING
         self._panel.set_state(AlgorithmState.RUNNING)
         self._panel.set_info("")
+        self._matrix_view.clear_matrix()
         self._animator.start(algorithm, self._current_interval_ms)
         self._update_step_availability()
 
@@ -850,7 +858,29 @@ class MainWindow(QMainWindow):
             labels=result.labels,
             node_colors=result.node_colors,
         )
+        self._update_matrix_view(result)
         self._update_step_availability()
+
+    def _update_matrix_view(self, result: StepResult) -> None:
+        """Update the matrix dock if the step provides matrix data.
+
+        The dock is shown automatically the first time a step with
+        matrix data arrives. It stays visible until Reset.
+
+        Args:
+            result: The StepResult of the current step.
+        """
+        if not result.matrix:
+            return
+        node_ids = [node.id for node in self._repository.get().nodes()]
+        self._matrix_view.set_matrix(
+            node_ids=node_ids,
+            matrix=result.matrix,
+            highlight_cell=result.highlight_cell,
+            highlight_axis=result.current,
+        )
+        if not self._matrix_dock.isVisible():
+            self._matrix_dock.show()
 
     def _on_algorithm_finished(self) -> None:
         """Switch to the finished state when the algorithm completes.

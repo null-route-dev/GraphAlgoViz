@@ -8,6 +8,7 @@ from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
+from application.algorithms.floyd_warshall import FloydWarshall
 from application.algorithms.greedy_coloring import GreedyColoring
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.topological_sort import TopologicalSort
@@ -118,8 +119,8 @@ def build_default_registry() -> AlgorithmRegistry:
 
     Returns:
         A new registry containing depth-first search, breadth-first
-        search, Dijkstra, Bellman-Ford, Prim's minimum spanning tree,
-        greedy coloring, and topological sort.
+        search, Dijkstra, Bellman-Ford, Floyd-Warshall, Prim's
+        minimum spanning tree, greedy coloring, and topological sort.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -164,6 +165,17 @@ def build_default_registry() -> AlgorithmRegistry:
                 "arbitrary edge weights and detects negative cycles."
             ),
             factory=BellmanFord,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="floyd-warshall",
+            display_name="Floyd-Warshall",
+            description=(
+                "Computes shortest paths between every pair of nodes "
+                "and shows the distances as a matrix."
+            ),
+            factory=FloydWarshall,
         )
     )
     registry.register(
