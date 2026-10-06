@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from application.algorithms.base import BaseAlgorithm
+from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
@@ -117,8 +118,8 @@ def build_default_registry() -> AlgorithmRegistry:
 
     Returns:
         A new registry containing depth-first search, breadth-first
-        search, Dijkstra, Prim's minimum spanning tree, greedy
-        coloring, and topological sort.
+        search, Dijkstra, Bellman-Ford, Prim's minimum spanning tree,
+        greedy coloring, and topological sort.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -152,6 +153,17 @@ def build_default_registry() -> AlgorithmRegistry:
                 "non-negative edge weights."
             ),
             factory=Dijkstra,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="bellman-ford",
+            display_name="Bellman-Ford",
+            description=(
+                "Finds shortest paths from the start node with "
+                "arbitrary edge weights and detects negative cycles."
+            ),
+            factory=BellmanFord,
         )
     )
     registry.register(

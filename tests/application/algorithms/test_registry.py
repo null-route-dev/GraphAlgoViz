@@ -2,6 +2,7 @@
 
 import pytest
 
+from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
@@ -118,6 +119,7 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "dfs",
         "bfs",
         "dijkstra",
+        "bellman-ford",
         "prim",
         "coloring",
         "toposort",
@@ -141,6 +143,7 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("dfs", graph, 1), DepthFirstSearch)
     assert isinstance(registry.create("bfs", graph, 1), BreadthFirstSearch)
     assert isinstance(registry.create("dijkstra", graph, 1), Dijkstra)
+    assert isinstance(registry.create("bellman-ford", graph, 1), BellmanFord)
     assert isinstance(registry.create("prim", graph, 1), PrimMST)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
