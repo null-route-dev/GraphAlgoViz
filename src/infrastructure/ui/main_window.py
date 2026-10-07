@@ -84,20 +84,14 @@ class MainWindow(QMainWindow):
     the project is dirty.
 
     Editing is locked while an algorithm is loaded, in any state
-    except IDLE. This keeps the algorithm's history consistent with
-    the graph it was computed against. Reset returns to IDLE and
-    unlocks editing.
+    except IDLE.
 
     Interaction modes can be switched from the toolbar or with the
-    number keys 1 through 4. The shortcuts are active only while this
-    window has focus.
-
-    The theme is persisted through AppSettings.
+    number keys 1 through 4. The theme is persisted through
+    AppSettings.
 
     Two docks are available from the View menu: the algorithm panel
-    on the right and the matrix view at the bottom. The matrix dock is
-    shown automatically when the running algorithm produces matrix
-    data, such as Floyd-Warshall, and hidden again on reset.
+    on the right and the matrix view at the bottom.
 
     Args:
         repository: Source of the current graph.
@@ -367,7 +361,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(enabled)
 
     def _sync_available_nodes(self) -> None:
-        """Update the panel's start node list from the current graph."""
+        """Update the panel's node lists from the current graph."""
         node_ids = [node.id for node in self._repository.get().nodes()]
         self._panel.set_available_nodes(node_ids)
 
@@ -615,12 +609,6 @@ class MainWindow(QMainWindow):
     def _handle_add_edge(self, node_id: int | None) -> None:
         """Add an edge between two consecutively clicked nodes.
 
-        The first click stores the source. The second click opens a
-        dialog for the edge attributes; if confirmed, the edge is
-        created. Clicking empty space cancels a pending source.
-        Clicking the same node twice also cancels, since self-loops
-        are not part of the editing flow.
-
         Args:
             node_id: Id of the node under the cursor, or None.
         """
@@ -707,10 +695,6 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Remove the node or edge under the cursor.
 
-        Nodes take priority over edges: if the click landed on a node,
-        only the node is removed. Otherwise, if an edge was hit, that
-        edge is removed.
-
         Args:
             node_id: Id of the node under the cursor, or None.
             edge: Endpoints of the edge under the cursor, or None.
@@ -756,12 +740,15 @@ class MainWindow(QMainWindow):
         self,
         algorithm_id: str,
         start_node_id: int,
+        target_node_id: object,
     ) -> None:
         """Start or resume an algorithm run.
 
         Args:
             algorithm_id: Identifier of the algorithm to run.
             start_node_id: Id of the node to start from.
+            target_node_id: Id of the target node, or None for
+                algorithms that do not require one.
         """
         if self._algorithm_state in (
             AlgorithmState.PAUSED,
@@ -774,9 +761,12 @@ class MainWindow(QMainWindow):
             self._update_step_availability()
             return
 
+        target: int | None = target_node_id if isinstance(target_node_id, int) else None
         graph = self._repository.get()
         try:
-            algorithm = self._registry.create(algorithm_id, graph, start_node_id)
+            algorithm = self._registry.create(
+                algorithm_id, graph, start_node_id, target
+            )
         except (KeyError, ValueError) as exc:
             self._show_temporary_message(str(exc))
             return
