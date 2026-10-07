@@ -19,6 +19,9 @@ class StepResult:
     Args:
         visited: Ids of nodes fully processed so far.
         current: Id of the node being processed in this step, if any.
+        current_edge: Endpoints of the edge being considered in this
+            step, if any. Used by algorithms that process edges one at
+            a time, such as Kruskal's.
         frontier: Ids waiting to be processed (stack or queue order).
         tree_edges: Edges forming the traversal tree.
         labels: Optional per-node text labels (for example, distances).
@@ -33,6 +36,7 @@ class StepResult:
 
     visited: frozenset[int] = frozenset()
     current: int | None = None
+    current_edge: tuple[int, int] | None = None
     frontier: tuple[int, ...] = ()
     tree_edges: frozenset[tuple[int, int]] = frozenset()
     labels: dict[int, str] = field(default_factory=dict)
