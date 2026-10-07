@@ -64,6 +64,10 @@ class GraphCanvas(FigureCanvasQTAgg):
     even when it is the current node; the current node is highlighted
     with a thicker red border instead.
 
+    A single edge may be marked as current in the step result. That
+    edge is drawn with a dashed line in the highlighted color to show
+    that the algorithm is considering it right now.
+
     Edges between the same pair of nodes are drawn as arcs. When only
     one edge connects two nodes, it is drawn as a straight line. When
     several edges share the same pair of endpoints, they are bent by
@@ -71,28 +75,11 @@ class GraphCanvas(FigureCanvasQTAgg):
     undirected edges share the same slot allocation, so a directed
     edge and its reverse remain visually distinct.
 
-    The canvas supports a dark and a light theme. Switching the theme
-    updates the figure background, node borders, edge color, and text
-    colors, and redraws immediately. Theme switching does not affect
-    positions, colors assigned by algorithms, or the current selection.
+    The canvas supports a dark and a light theme.
 
     Color changes are animated. When a new draw request arrives with
     different fill colors, the canvas interpolates each node's color
-    over several frames. If a new request arrives while a transition
-    is running, the current transition is finalized immediately and a
-    new one starts from the final state. This keeps the visual result
-    predictable at any animation speed.
-
-    Directed edges are drawn with an arrow head near the target node.
-    The line is shortened by NODE_VISUAL_RADIUS at the target end so
-    that the arrow head is not hidden under the node marker. Hit
-    testing always uses the full segment between node centers.
-
-    The canvas reports three kinds of mouse activity: a left button
-    press with coordinates and the node/edge under the cursor, mouse
-    motion while the left button is held down over a node, and the
-    release of the left button. Interpretation is the caller's
-    responsibility.
+    over several frames.
 
     Args:
         parent: Optional Qt parent widget.
@@ -135,6 +122,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_positions: dict[int, Position] = {}
         self._last_highlighted_nodes: frozenset[int] = frozenset()
         self._last_current_node: int | None = None
+        self._last_current_edge: tuple[int, int] | None = None
         self._last_highlighted_edges: frozenset[tuple[int, int]] = frozenset()
         self._last_labels: dict[int, str] = {}
 
@@ -188,6 +176,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         highlighted_edges: frozenset[tuple[int, int]] = frozenset(),
         labels: dict[int, str] | None = None,
         node_colors: dict[int, str] | None = None,
+        current_edge: tuple[int, int] | None = None,
     ) -> None:
         """Render the graph on the canvas with animated color changes.
 
@@ -199,11 +188,14 @@ class GraphCanvas(FigureCanvasQTAgg):
             highlighted_edges: Edges to emphasize.
             labels: Optional per-node text labels.
             node_colors: Optional per-node fill colors as hex strings.
+            current_edge: Optional edge to draw as the one being
+                considered by the algorithm.
         """
         self._last_graph = graph
         self._last_positions = dict(positions)
         self._last_highlighted_nodes = highlighted_nodes
         self._last_current_node = current_node
+        self._last_current_edge = current_edge
         self._last_highlighted_edges = highlighted_edges
         self._last_labels = dict(labels or {})
 
@@ -270,6 +262,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             self._last_graph,
             self._last_positions,
             self._last_highlighted_edges,
+            self._last_current_edge,
         )
         self._draw_nodes(
             self._last_graph,
@@ -286,6 +279,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         graph: Graph,
         positions: dict[int, Position],
         highlighted: frozenset[tuple[int, int]],
+        current_edge: tuple[int, int] | None,
     ) -> None:
         groups = _group_edges_by_endpoints(graph.edges())
         for key, edges in groups.items():
@@ -299,10 +293,24 @@ class GraphCanvas(FigureCanvasQTAgg):
                     edge.target,
                     edge.source,
                 ) in highlighted
-                color = COLOR_CURRENT if is_highlighted else self._edge_color
-                width = 2.5 if is_highlighted else 1.0
+                is_current = current_edge is not None and (
+                    (edge.source, edge.target) == current_edge
+                    or (edge.target, edge.source) == current_edge
+                )
+                if is_current:
+                    color = COLOR_HIGHLIGHTED
+                    width = 2.5
+                    linestyle = "--"
+                elif is_highlighted:
+                    color = COLOR_CURRENT
+                    width = 2.5
+                    linestyle = "-"
+                else:
+                    color = self._edge_color
+                    width = 1.0
+                    linestyle = "-"
                 rad = _effective_rad(edge, key, _arc_rad_for_index(index, total))
-                self._draw_edge(start, end, color, width, edge.directed, rad)
+                self._draw_edge(start, end, color, width, edge.directed, rad, linestyle)
                 self._draw_edge_weight(edge.weight, start, end, rad)
 
     def _draw_edge(
@@ -313,13 +321,15 @@ class GraphCanvas(FigureCanvasQTAgg):
         width: float,
         directed: bool,
         rad: float,
+        linestyle: str,
     ) -> None:
-        if rad == 0.0 and not directed:
+        if rad == 0.0 and not directed and linestyle == "-":
             self._axes.plot(
                 [start.x, end.x],
                 [start.y, end.y],
                 color=color,
                 linewidth=width,
+                linestyle=linestyle,
                 zorder=1,
             )
             return
@@ -342,6 +352,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             connectionstyle=f"arc3,rad={rad}",
             color=color,
             linewidth=width,
+            linestyle=linestyle,
             shrinkA=0.0,
             shrinkB=0.0,
             zorder=1,
@@ -568,9 +579,6 @@ def _group_edges_by_endpoints(
 def _arc_rad_for_index(index: int, total: int) -> float:
     """Return the arc curvature for the given slot in a group.
 
-    The slots are centered around zero: a group of one gets zero, a
-    group of three gets -ARC_SPACING, 0, and +ARC_SPACING, and so on.
-
     Args:
         index: Zero-based index of the edge within its group.
         total: Number of edges in the group.
@@ -589,11 +597,6 @@ def _effective_rad(
     rad: float,
 ) -> float:
     """Return the curvature to use when drawing the edge.
-
-    The curvature is defined relative to the canonical direction from
-    the smaller node id to the larger one. If the edge is oriented
-    against that direction, the sign is inverted so that two opposite
-    edges between the same nodes bend to opposite sides.
 
     Args:
         edge: The edge being drawn.
@@ -615,11 +618,6 @@ def _arc_midpoint(
     rad: float,
 ) -> tuple[float, float]:
     """Return the midpoint of an arc3 curve between two positions.
-
-    For a quadratic Bezier curve produced by matplotlib's arc3
-    connection style, the point at parameter t=0.5 lies halfway
-    between the segment midpoint and the control point. The control
-    point is offset perpendicular to the segment by rad * length.
 
     Args:
         start: The start position of the edge.

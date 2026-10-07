@@ -10,6 +10,7 @@ from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
 from application.algorithms.floyd_warshall import FloydWarshall
 from application.algorithms.greedy_coloring import GreedyColoring
+from application.algorithms.kruskal_mst import KruskalMST
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.topological_sort import TopologicalSort
 from domain.entities.graph import Graph
@@ -119,8 +120,9 @@ def build_default_registry() -> AlgorithmRegistry:
 
     Returns:
         A new registry containing depth-first search, breadth-first
-        search, Dijkstra, Bellman-Ford, Floyd-Warshall, Prim's
-        minimum spanning tree, greedy coloring, and topological sort.
+        search, Dijkstra, Bellman-Ford, Floyd-Warshall, Prim's and
+        Kruskal's minimum spanning trees, greedy coloring, and
+        topological sort.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -187,6 +189,18 @@ def build_default_registry() -> AlgorithmRegistry:
                 "the cheapest edge connecting a new node to the tree."
             ),
             factory=PrimMST,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="kruskal",
+            display_name="Kruskal's Minimum Spanning Tree",
+            description=(
+                "Builds a minimum spanning tree by processing edges "
+                "in weight order and rejecting those that would form "
+                "a cycle."
+            ),
+            factory=KruskalMST,
         )
     )
     registry.register(

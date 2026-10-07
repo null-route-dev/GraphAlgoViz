@@ -857,15 +857,13 @@ class MainWindow(QMainWindow):
             highlighted_edges=result.tree_edges,
             labels=result.labels,
             node_colors=result.node_colors,
+            current_edge=result.current_edge,
         )
         self._update_matrix_view(result)
         self._update_step_availability()
 
     def _update_matrix_view(self, result: StepResult) -> None:
         """Update the matrix dock if the step provides matrix data.
-
-        The dock is shown automatically the first time a step with
-        matrix data arrives. It stays visible until Reset.
 
         Args:
             result: The StepResult of the current step.
@@ -883,11 +881,7 @@ class MainWindow(QMainWindow):
             self._matrix_dock.show()
 
     def _on_algorithm_finished(self) -> None:
-        """Switch to the finished state when the algorithm completes.
-
-        Editing stays locked: the user must Reset to modify the graph,
-        since the algorithm's history refers to the current graph.
-        """
+        """Switch to the finished state when the algorithm completes."""
         self._algorithm_state = AlgorithmState.FINISHED
         self._panel.set_state(AlgorithmState.FINISHED)
         self._update_step_availability()

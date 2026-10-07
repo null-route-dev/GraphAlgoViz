@@ -8,6 +8,7 @@ from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
 from application.algorithms.floyd_warshall import FloydWarshall
 from application.algorithms.greedy_coloring import GreedyColoring
+from application.algorithms.kruskal_mst import KruskalMST
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.registry import (
     AlgorithmInfo,
@@ -123,6 +124,7 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "bellman-ford",
         "floyd-warshall",
         "prim",
+        "kruskal",
         "coloring",
         "toposort",
     ]
@@ -148,5 +150,6 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("bellman-ford", graph, 1), BellmanFord)
     assert isinstance(registry.create("floyd-warshall", graph, 1), FloydWarshall)
     assert isinstance(registry.create("prim", graph, 1), PrimMST)
+    assert isinstance(registry.create("kruskal", graph, 1), KruskalMST)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
