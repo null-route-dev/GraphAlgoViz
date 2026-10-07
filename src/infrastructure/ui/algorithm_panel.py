@@ -22,6 +22,8 @@ SLIDER_DEFAULT = 5
 BASE_INTERVAL_MS = 1000
 MIN_INTERVAL_MS = 50
 
+TARGET_ROW_INDEX = 2
+
 
 class AlgorithmState(Enum):
     """Visual state of the algorithm controls."""
@@ -40,12 +42,16 @@ class AlgorithmPanel(QWidget):
     responsibility. The panel reflects state set by the caller through
     ``set_state`` and ``set_step_availability``.
 
+    The target node selector is shown only when the selected algorithm
+    requires a target. Which algorithms require one is read from the
+    algorithm registry.
+
     Args:
         registry: Source of available algorithm metadata.
         parent: Optional Qt parent widget.
     """
 
-    run_requested = Signal(str, int)
+    run_requested = Signal(str, int, object)
     pause_requested = Signal()
     step_requested = Signal()
     step_back_requested = Signal()
@@ -63,6 +69,7 @@ class AlgorithmPanel(QWidget):
         self._has_nodes = False
         self._can_step_back = False
         self._can_step_forward = False
+        self._requires_target = False
         self._build_ui()
         self._populate_algorithms()
         self._update_buttons()
@@ -93,20 +100,13 @@ class AlgorithmPanel(QWidget):
         self._update_buttons()
 
     def set_available_nodes(self, node_ids: list[int]) -> None:
-        """Update the list of node ids available as start nodes.
+        """Update the start and target node lists.
 
         Args:
             node_ids: Ids of nodes in the current graph.
         """
-        current = self._start_node_combo.currentData()
-        self._start_node_combo.blockSignals(True)
-        self._start_node_combo.clear()
-        for node_id in node_ids:
-            self._start_node_combo.addItem(str(node_id), node_id)
-        if current in node_ids:
-            index = self._start_node_combo.findData(current)
-            self._start_node_combo.setCurrentIndex(index)
-        self._start_node_combo.blockSignals(False)
+        self._replace_combo_items(self._start_node_combo, node_ids)
+        self._replace_combo_items(self._target_node_combo, node_ids)
         self._has_nodes = bool(node_ids)
         self._update_buttons()
 
@@ -118,15 +118,28 @@ class AlgorithmPanel(QWidget):
         """
         self._info_label.setText(text)
 
+    def _replace_combo_items(self, combo: QComboBox, node_ids: list[int]) -> None:
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for node_id in node_ids:
+            combo.addItem(str(node_id), node_id)
+        if current in node_ids:
+            index = combo.findData(current)
+            combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        form = QFormLayout()
+        self._form = QFormLayout()
         self._algorithm_combo = QComboBox(self)
         self._start_node_combo = QComboBox(self)
-        form.addRow("Algorithm:", self._algorithm_combo)
-        form.addRow("Start node:", self._start_node_combo)
-        layout.addLayout(form)
+        self._target_node_combo = QComboBox(self)
+        self._form.addRow("Algorithm:", self._algorithm_combo)
+        self._form.addRow("Start node:", self._start_node_combo)
+        self._form.addRow("Target node:", self._target_node_combo)
+        layout.addLayout(self._form)
 
         buttons = QHBoxLayout()
         self._run_button = QPushButton("Run", self)
@@ -171,6 +184,22 @@ class AlgorithmPanel(QWidget):
     def _populate_algorithms(self) -> None:
         for info in self._registry.all():
             self._algorithm_combo.addItem(info.display_name, info.id)
+        self._algorithm_combo.currentIndexChanged.connect(self._on_algorithm_changed)
+        self._update_target_visibility()
+
+    def _on_algorithm_changed(self, _index: int) -> None:
+        self._update_target_visibility()
+
+    def _update_target_visibility(self) -> None:
+        algorithm_id = self._algorithm_combo.currentData()
+        requires_target = False
+        if isinstance(algorithm_id, str):
+            try:
+                requires_target = self._registry.get(algorithm_id).requires_target
+            except KeyError:
+                requires_target = False
+        self._requires_target = requires_target
+        self._form.setRowVisible(TARGET_ROW_INDEX, requires_target)
 
     def _update_buttons(self) -> None:
         state = self._state
@@ -195,7 +224,13 @@ class AlgorithmPanel(QWidget):
             return
         if not isinstance(start_node_id, int):
             return
-        self.run_requested.emit(algorithm_id, start_node_id)
+        target: int | None = None
+        if self._requires_target:
+            target_node_id = self._target_node_combo.currentData()
+            if not isinstance(target_node_id, int):
+                return
+            target = target_node_id
+        self.run_requested.emit(algorithm_id, start_node_id, target)
 
     def _emit_pause(self) -> None:
         self.pause_requested.emit()

@@ -74,7 +74,7 @@ def test_step_back_disabled_when_no_history(panel: AlgorithmPanel) -> None:
 def test_set_available_nodes_preserves_selection(
     panel: AlgorithmPanel,
 ) -> None:
-    """Re-populating the start node list keeps the current selection."""
+    """Re-populating the node list keeps the current selection."""
     panel.set_available_nodes([1, 2, 3])
     panel._start_node_combo.setCurrentIndex(1)
     panel.set_available_nodes([1, 2, 3, 4])
@@ -83,21 +83,25 @@ def test_set_available_nodes_preserves_selection(
 
 
 def test_run_emits_signal_with_selection(panel: AlgorithmPanel) -> None:
-    """Run emits the algorithm id and start node id."""
+    """Run emits the algorithm id, start node id, and target."""
     panel.set_available_nodes([1, 2])
     panel._start_node_combo.setCurrentIndex(1)
-    received: list[tuple[str, int]] = []
-    panel.run_requested.connect(lambda algo, start: received.append((algo, start)))
+    received: list[tuple[str, int, object]] = []
+    panel.run_requested.connect(
+        lambda algo, start, target: received.append((algo, start, target))
+    )
 
     panel._run_button.click()
 
-    assert received == [("dfs", 2)]
+    assert received == [("dfs", 2, None)]
 
 
 def test_run_does_not_emit_when_disabled(panel: AlgorithmPanel) -> None:
     """A disabled Run button does not emit a request."""
-    received: list[tuple[str, int]] = []
-    panel.run_requested.connect(lambda algo, start: received.append((algo, start)))
+    received: list[tuple[str, int, object]] = []
+    panel.run_requested.connect(
+        lambda algo, start, target: received.append((algo, start, target))
+    )
 
     panel._run_button.click()
 
@@ -163,3 +167,49 @@ def test_set_info_updates_label(panel: AlgorithmPanel) -> None:
 def test_panel_is_a_widget() -> None:
     """Sanity check: the panel is a QWidget subclass."""
     assert issubclass(AlgorithmPanel, QWidget)
+
+
+def test_target_row_hidden_for_algorithm_without_target(
+    panel: AlgorithmPanel,
+) -> None:
+    """The target row is hidden when a non-target algorithm is selected."""
+    panel.set_available_nodes([1, 2, 3])
+    panel.set_state(AlgorithmState.IDLE)
+
+    assert panel._requires_target is False
+
+
+def test_target_row_visible_for_astar(panel: AlgorithmPanel) -> None:
+    """The target row becomes visible when A* is selected."""
+    astar_index = -1
+    for i in range(panel._algorithm_combo.count()):
+        if panel._algorithm_combo.itemData(i) == "astar":
+            astar_index = i
+            break
+    assert astar_index >= 0
+
+    panel._algorithm_combo.setCurrentIndex(astar_index)
+
+    assert panel._requires_target is True
+
+
+def test_astar_run_emits_target(panel: AlgorithmPanel) -> None:
+    """Running A* emits the selected target node id."""
+    astar_index = -1
+    for i in range(panel._algorithm_combo.count()):
+        if panel._algorithm_combo.itemData(i) == "astar":
+            astar_index = i
+            break
+    panel.set_available_nodes([1, 2, 3])
+    panel._algorithm_combo.setCurrentIndex(astar_index)
+    panel._target_node_combo.setCurrentIndex(1)
+
+    received: list[tuple[str, int, object]] = []
+    panel.run_requested.connect(
+        lambda algo, start, target: received.append((algo, start, target))
+    )
+    panel._run_button.click()
+
+    assert len(received) == 1
+    assert received[0][0] == "astar"
+    assert received[0][2] == 2
