@@ -2,6 +2,8 @@
 
 import pytest
 
+from application.algorithms.astar import AStar
+from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.depth_first_search import DepthFirstSearch
@@ -31,13 +33,22 @@ def build_chain() -> Graph:
     return graph
 
 
+def _dfs_factory(
+    graph: Graph,
+    start_node_id: int,
+    target_node_id: int | None,
+) -> BaseAlgorithm:
+    _ = target_node_id
+    return DepthFirstSearch(graph, start_node_id)
+
+
 def make_info(algorithm_id: str) -> AlgorithmInfo:
     """Return AlgorithmInfo with the given id and a DFS factory."""
     return AlgorithmInfo(
         id=algorithm_id,
         display_name=algorithm_id.upper(),
         description=f"Description of {algorithm_id}",
-        factory=DepthFirstSearch,
+        factory=_dfs_factory,
     )
 
 
@@ -121,6 +132,7 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "dfs",
         "bfs",
         "dijkstra",
+        "astar",
         "bellman-ford",
         "floyd-warshall",
         "prim",
@@ -147,9 +159,34 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("dfs", graph, 1), DepthFirstSearch)
     assert isinstance(registry.create("bfs", graph, 1), BreadthFirstSearch)
     assert isinstance(registry.create("dijkstra", graph, 1), Dijkstra)
+    assert isinstance(registry.create("astar", graph, 1, 3), AStar)
     assert isinstance(registry.create("bellman-ford", graph, 1), BellmanFord)
     assert isinstance(registry.create("floyd-warshall", graph, 1), FloydWarshall)
     assert isinstance(registry.create("prim", graph, 1), PrimMST)
     assert isinstance(registry.create("kruskal", graph, 1), KruskalMST)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
+
+
+def test_astar_requires_target() -> None:
+    """The registry reports that A* requires a target node."""
+    registry = build_default_registry()
+
+    assert registry.get("astar").requires_target is True
+
+
+def test_other_algorithms_do_not_require_target() -> None:
+    """All algorithms except A* do not require a target node."""
+    registry = build_default_registry()
+
+    for info in registry.all():
+        if info.id != "astar":
+            assert info.requires_target is False
+
+
+def test_astar_without_target_raises() -> None:
+    """Creating A* without a target node raises ValueError."""
+    registry = build_default_registry()
+
+    with pytest.raises(ValueError, match="requires a target"):
+        registry.create("astar", build_chain(), 1)

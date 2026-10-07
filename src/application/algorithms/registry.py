@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from application.algorithms.astar import AStar
 from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
@@ -15,7 +16,40 @@ from application.algorithms.prim_mst import PrimMST
 from application.algorithms.topological_sort import TopologicalSort
 from domain.entities.graph import Graph
 
-AlgorithmFactory = Callable[[Graph, int], BaseAlgorithm]
+AlgorithmFactory = Callable[[Graph, int, int | None], BaseAlgorithm]
+
+
+def _no_target(
+    factory: Callable[[Graph, int], BaseAlgorithm],
+) -> AlgorithmFactory:
+    """Adapt a two-argument factory to the three-argument signature.
+
+    Args:
+        factory: A factory that takes only a graph and a start node.
+
+    Returns:
+        A factory that accepts and ignores an optional target node.
+    """
+
+    def wrapper(
+        graph: Graph,
+        start_node_id: int,
+        target_node_id: int | None,
+    ) -> BaseAlgorithm:
+        _ = target_node_id
+        return factory(graph, start_node_id)
+
+    return wrapper
+
+
+def _astar_factory(
+    graph: Graph,
+    start_node_id: int,
+    target_node_id: int | None,
+) -> BaseAlgorithm:
+    if target_node_id is None:
+        raise ValueError("A* requires a target node")
+    return AStar(graph, start_node_id, target_node_id)
 
 
 @dataclass(frozen=True)
@@ -27,13 +61,16 @@ class AlgorithmInfo:
         display_name: Human-readable name shown in the UI.
         description: Short explanation of what the algorithm does.
         factory: Callable that creates an algorithm instance from a
-            graph and a start node id.
+            graph, a start node id, and an optional target node id.
+        requires_target: Whether the algorithm needs a target node to
+            run. The UI uses this flag to show the target selector.
     """
 
     id: str
     display_name: str
     description: str
     factory: AlgorithmFactory
+    requires_target: bool = False
 
 
 class AlgorithmRegistry:
@@ -81,6 +118,7 @@ class AlgorithmRegistry:
         algorithm_id: str,
         graph: Graph,
         start_node_id: int,
+        target_node_id: int | None = None,
     ) -> BaseAlgorithm:
         """Instantiate an algorithm by id.
 
@@ -88,14 +126,18 @@ class AlgorithmRegistry:
             algorithm_id: Identifier of the algorithm.
             graph: The graph to run the algorithm on.
             start_node_id: Id of the start node.
+            target_node_id: Id of the target node, if the algorithm
+                requires one.
 
         Returns:
             A fresh algorithm instance.
 
         Raises:
             KeyError: If no algorithm with the given id is registered.
+            ValueError: If the algorithm requires a target and none
+                was provided.
         """
-        return self.get(algorithm_id).factory(graph, start_node_id)
+        return self.get(algorithm_id).factory(graph, start_node_id, target_node_id)
 
     def all(self) -> list[AlgorithmInfo]:
         """Return metadata for every registered algorithm.
@@ -120,8 +162,8 @@ def build_default_registry() -> AlgorithmRegistry:
 
     Returns:
         A new registry containing depth-first search, breadth-first
-        search, Dijkstra, Bellman-Ford, Floyd-Warshall, Prim's and
-        Kruskal's minimum spanning trees, greedy coloring, and
+        search, Dijkstra, A*, Bellman-Ford, Floyd-Warshall, Prim's
+        and Kruskal's minimum spanning trees, greedy coloring, and
         topological sort.
     """
     registry = AlgorithmRegistry()
@@ -133,7 +175,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Traverses the graph by exploring as far as possible "
                 "along each branch before backtracking."
             ),
-            factory=DepthFirstSearch,
+            factory=_no_target(DepthFirstSearch),
         )
     )
     registry.register(
@@ -144,7 +186,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Traverses the graph level by level, visiting all "
                 "neighbours of a node before going deeper."
             ),
-            factory=BreadthFirstSearch,
+            factory=_no_target(BreadthFirstSearch),
         )
     )
     registry.register(
@@ -155,7 +197,19 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Finds shortest paths from the start node using "
                 "non-negative edge weights."
             ),
-            factory=Dijkstra,
+            factory=_no_target(Dijkstra),
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="astar",
+            display_name="A* Search",
+            description=(
+                "Finds the shortest path to a target node using a "
+                "heuristic to guide the search."
+            ),
+            factory=_astar_factory,
+            requires_target=True,
         )
     )
     registry.register(
@@ -166,7 +220,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Finds shortest paths from the start node with "
                 "arbitrary edge weights and detects negative cycles."
             ),
-            factory=BellmanFord,
+            factory=_no_target(BellmanFord),
         )
     )
     registry.register(
@@ -177,7 +231,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Computes shortest paths between every pair of nodes "
                 "and shows the distances as a matrix."
             ),
-            factory=FloydWarshall,
+            factory=_no_target(FloydWarshall),
         )
     )
     registry.register(
@@ -188,7 +242,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Builds a minimum spanning tree by repeatedly adding "
                 "the cheapest edge connecting a new node to the tree."
             ),
-            factory=PrimMST,
+            factory=_no_target(PrimMST),
         )
     )
     registry.register(
@@ -200,7 +254,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "in weight order and rejecting those that would form "
                 "a cycle."
             ),
-            factory=KruskalMST,
+            factory=_no_target(KruskalMST),
         )
     )
     registry.register(
@@ -211,7 +265,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Colors nodes so that no two adjacent nodes share a "
                 "color, picking the smallest available color for each."
             ),
-            factory=GreedyColoring,
+            factory=_no_target(GreedyColoring),
         )
     )
     registry.register(
@@ -223,7 +277,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "every directed edge goes from an earlier node to a "
                 "later one."
             ),
-            factory=TopologicalSort,
+            factory=_no_target(TopologicalSort),
         )
     )
     return registry
