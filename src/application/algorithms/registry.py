@@ -7,6 +7,7 @@ from application.algorithms.astar import AStar
 from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
+from application.algorithms.bridges_articulations import BridgesAndArticulations
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
 from application.algorithms.floyd_warshall import FloydWarshall
@@ -164,8 +165,9 @@ def build_default_registry() -> AlgorithmRegistry:
     Returns:
         A new registry containing depth-first search, breadth-first
         search, Dijkstra, A*, Bellman-Ford, Floyd-Warshall, Prim's
-        and Kruskal's minimum spanning trees, Tarjan's SCC, greedy
-        coloring, and topological sort.
+        and Kruskal's minimum spanning trees, Tarjan's SCC, bridges
+        and articulation points, greedy coloring, and topological
+        sort.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -267,6 +269,17 @@ def build_default_registry() -> AlgorithmRegistry:
                 "graph using a single depth-first traversal."
             ),
             factory=_no_target(TarjanSCC),
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="bridges",
+            display_name="Bridges and Articulation Points",
+            description=(
+                "Finds edges whose removal disconnects the graph and "
+                "nodes whose removal does the same."
+            ),
+            factory=_no_target(BridgesAndArticulations),
         )
     )
     registry.register(

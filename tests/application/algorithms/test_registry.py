@@ -6,6 +6,7 @@ from application.algorithms.astar import AStar
 from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.breadth_first_search import BreadthFirstSearch
+from application.algorithms.bridges_articulations import BridgesAndArticulations
 from application.algorithms.depth_first_search import DepthFirstSearch
 from application.algorithms.dijkstra import Dijkstra
 from application.algorithms.floyd_warshall import FloydWarshall
@@ -139,6 +140,7 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "prim",
         "kruskal",
         "tarjan",
+        "bridges",
         "coloring",
         "toposort",
     ]
@@ -167,6 +169,7 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("prim", graph, 1), PrimMST)
     assert isinstance(registry.create("kruskal", graph, 1), KruskalMST)
     assert isinstance(registry.create("tarjan", graph, 1), TarjanSCC)
+    assert isinstance(registry.create("bridges", graph, 1), BridgesAndArticulations)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
 
