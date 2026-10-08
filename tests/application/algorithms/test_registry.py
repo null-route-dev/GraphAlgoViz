@@ -17,6 +17,7 @@ from application.algorithms.registry import (
     AlgorithmRegistry,
     build_default_registry,
 )
+from application.algorithms.tarjan_scc import TarjanSCC
 from application.algorithms.topological_sort import TopologicalSort
 from domain.entities.edge import Edge
 from domain.entities.graph import Graph
@@ -137,6 +138,7 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "floyd-warshall",
         "prim",
         "kruskal",
+        "tarjan",
         "coloring",
         "toposort",
     ]
@@ -164,6 +166,7 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("floyd-warshall", graph, 1), FloydWarshall)
     assert isinstance(registry.create("prim", graph, 1), PrimMST)
     assert isinstance(registry.create("kruskal", graph, 1), KruskalMST)
+    assert isinstance(registry.create("tarjan", graph, 1), TarjanSCC)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
 

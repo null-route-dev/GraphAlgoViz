@@ -13,6 +13,7 @@ from application.algorithms.floyd_warshall import FloydWarshall
 from application.algorithms.greedy_coloring import GreedyColoring
 from application.algorithms.kruskal_mst import KruskalMST
 from application.algorithms.prim_mst import PrimMST
+from application.algorithms.tarjan_scc import TarjanSCC
 from application.algorithms.topological_sort import TopologicalSort
 from domain.entities.graph import Graph
 
@@ -163,8 +164,8 @@ def build_default_registry() -> AlgorithmRegistry:
     Returns:
         A new registry containing depth-first search, breadth-first
         search, Dijkstra, A*, Bellman-Ford, Floyd-Warshall, Prim's
-        and Kruskal's minimum spanning trees, greedy coloring, and
-        topological sort.
+        and Kruskal's minimum spanning trees, Tarjan's SCC, greedy
+        coloring, and topological sort.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -255,6 +256,17 @@ def build_default_registry() -> AlgorithmRegistry:
                 "a cycle."
             ),
             factory=_no_target(KruskalMST),
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="tarjan",
+            display_name="Tarjan's Strongly Connected Components",
+            description=(
+                "Finds strongly connected components in a directed "
+                "graph using a single depth-first traversal."
+            ),
+            factory=_no_target(TarjanSCC),
         )
     )
     registry.register(
