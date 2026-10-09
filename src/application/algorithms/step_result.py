@@ -20,15 +20,17 @@ class StepResult:
         visited: Ids of nodes fully processed so far.
         current: Id of the node being processed in this step, if any.
         current_edge: Endpoints of the edge being considered in this
-            step, if any. Used by algorithms that process edges one at
-            a time, such as Kruskal's.
+            step, if any.
         frontier: Ids waiting to be processed (stack or queue order).
         tree_edges: Edges forming the traversal tree.
         labels: Optional per-node text labels (for example, distances).
         node_colors: Optional per-node fill colors as hex strings.
+        edge_labels: Optional per-edge text labels keyed by the
+            (source, target) pair of the edge as it appears in the
+            graph. Used by algorithms that annotate edges rather than
+            nodes, such as max flow.
         matrix: Optional matrix of values indexed by (row, col) node
-            ids. Used by algorithms that produce a table rather than
-            a single per-node value.
+            ids.
         highlight_cell: Optional (row, col) node id pair identifying
             the matrix cell to emphasize in this step.
         info: Human-readable description of this step.
@@ -41,6 +43,7 @@ class StepResult:
     tree_edges: frozenset[tuple[int, int]] = frozenset()
     labels: dict[int, str] = field(default_factory=dict)
     node_colors: dict[int, str] = field(default_factory=dict)
+    edge_labels: dict[tuple[int, int], str] = field(default_factory=dict)
     matrix: dict[tuple[int, int], str] = field(default_factory=dict)
     highlight_cell: tuple[int, int] | None = None
     info: str = ""

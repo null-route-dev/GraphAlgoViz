@@ -60,26 +60,21 @@ class GraphCanvas(FigureCanvasQTAgg):
     Node fill colors come from the algorithm's step result, if any.
     When a node has no explicit color, the canvas falls back to its
     default palette: orange for visited nodes, red for the current
-    node, blue otherwise. A node that has an explicit color keeps it
-    even when it is the current node; the current node is highlighted
-    with a thicker red border instead.
+    node, blue otherwise.
+
+    Edge labels override the default edge weight display when present.
+    Algorithms that annotate edges, such as max flow, provide labels
+    like "3/5" for flow over capacity.
 
     A single edge may be marked as current in the step result. That
     edge is drawn with a dashed line in the highlighted color to show
     that the algorithm is considering it right now.
 
-    Edges between the same pair of nodes are drawn as arcs. When only
-    one edge connects two nodes, it is drawn as a straight line. When
-    several edges share the same pair of endpoints, they are bent by
-    different amounts so that they do not overlap. Directed and
-    undirected edges share the same slot allocation, so a directed
-    edge and its reverse remain visually distinct.
+    Edges between the same pair of nodes are drawn as arcs.
 
     The canvas supports a dark and a light theme.
 
-    Color changes are animated. When a new draw request arrives with
-    different fill colors, the canvas interpolates each node's color
-    over several frames.
+    Color changes are animated across a few frames.
 
     Args:
         parent: Optional Qt parent widget.
@@ -125,6 +120,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_current_edge: tuple[int, int] | None = None
         self._last_highlighted_edges: frozenset[tuple[int, int]] = frozenset()
         self._last_labels: dict[int, str] = {}
+        self._last_edge_labels: dict[tuple[int, int], str] = {}
 
         self._colors_start: dict[int, str] = {}
         self._colors_target: dict[int, str] = {}
@@ -177,6 +173,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         labels: dict[int, str] | None = None,
         node_colors: dict[int, str] | None = None,
         current_edge: tuple[int, int] | None = None,
+        edge_labels: dict[tuple[int, int], str] | None = None,
     ) -> None:
         """Render the graph on the canvas with animated color changes.
 
@@ -190,6 +187,8 @@ class GraphCanvas(FigureCanvasQTAgg):
             node_colors: Optional per-node fill colors as hex strings.
             current_edge: Optional edge to draw as the one being
                 considered by the algorithm.
+            edge_labels: Optional per-edge text labels that override
+                the default edge weight display.
         """
         self._last_graph = graph
         self._last_positions = dict(positions)
@@ -198,6 +197,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_current_edge = current_edge
         self._last_highlighted_edges = highlighted_edges
         self._last_labels = dict(labels or {})
+        self._last_edge_labels = dict(edge_labels or {})
 
         new_targets: dict[int, str] = {}
         for node in graph.nodes():
@@ -311,7 +311,7 @@ class GraphCanvas(FigureCanvasQTAgg):
                     linestyle = "-"
                 rad = _effective_rad(edge, key, _arc_rad_for_index(index, total))
                 self._draw_edge(start, end, color, width, edge.directed, rad, linestyle)
-                self._draw_edge_weight(edge.weight, start, end, rad)
+                self._draw_edge_weight(edge, start, end, rad)
 
     def _draw_edge(
         self,
@@ -361,16 +361,23 @@ class GraphCanvas(FigureCanvasQTAgg):
 
     def _draw_edge_weight(
         self,
-        weight: float,
+        edge: Edge,
         start: Position,
         end: Position,
         rad: float,
     ) -> None:
+        label = self._last_edge_labels.get(
+            (edge.source, edge.target),
+            self._last_edge_labels.get(
+                (edge.target, edge.source),
+                f"{edge.weight:g}",
+            ),
+        )
         mid_x, mid_y = _arc_midpoint(start, end, rad)
         self._axes.text(
             mid_x,
             mid_y,
-            f"{weight:g}",
+            label,
             ha="center",
             va="center",
             color=self._weight_text_color,
@@ -498,16 +505,13 @@ class GraphCanvas(FigureCanvasQTAgg):
     def _find_node_at(self, x: float, y: float) -> int | None:
         """Return the id of the node closest to the given point.
 
-        A node counts as hit if its center lies within NODE_HIT_RADIUS
-        of the point in unit coordinates. The closest node wins when
-        several are within range.
-
         Args:
             x: Horizontal coordinate of the point.
             y: Vertical coordinate of the point.
 
         Returns:
-            The id of the closest node within range, or None.
+            The id of the closest node within NODE_HIT_RADIUS, or
+            None.
         """
         if self._last_graph is None:
             return None
@@ -526,20 +530,13 @@ class GraphCanvas(FigureCanvasQTAgg):
     def _find_edge_at(self, x: float, y: float) -> tuple[int, int] | None:
         """Return the endpoints of the edge closest to the given point.
 
-        An edge counts as hit if the point lies within EDGE_HIT_RADIUS
-        of the segment connecting its endpoints. The segment used for
-        hit testing always runs between node centers, regardless of
-        whether the edge is drawn as a straight line or an arc.
-
-        The closest edge wins when several are within range.
-
         Args:
             x: Horizontal coordinate of the point.
             y: Vertical coordinate of the point.
 
         Returns:
             The (source, target) pair of the closest edge within
-            range, or None.
+            EDGE_HIT_RADIUS, or None.
         """
         if self._last_graph is None:
             return None
@@ -646,10 +643,9 @@ def _lerp_color(start: str, end: str, t: float) -> str:
     """Interpolate between two hex colors.
 
     Args:
-        start: Hex color string, for example "#1f77b4".
+        start: Hex color string.
         end: Hex color string of the same format.
-        t: Interpolation parameter in [0.0, 1.0]. 0 returns start,
-            1 returns end, values in between produce a blend.
+        t: Interpolation parameter in [0.0, 1.0].
 
     Returns:
         A hex color string representing the interpolated color.

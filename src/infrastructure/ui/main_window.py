@@ -73,38 +73,10 @@ MODE_SHORTCUTS: dict[InteractionMode, str] = {
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and docks.
 
-    The window owns the current interaction mode, the pending edge
-    source, the node being dragged, the node positions, the algorithm
-    state, the path of the last saved or opened project, a dirty flag,
-    and the current theme.
-
-    Any mutation of the graph or of node positions marks the project
-    as dirty. Saving, loading, and creating a new project reset the
-    flag. New, Open, and window close ask the user to save first if
-    the project is dirty.
-
-    Editing is locked while an algorithm is loaded, in any state
-    except IDLE.
-
-    Interaction modes can be switched from the toolbar or with the
-    number keys 1 through 4. The theme is persisted through
-    AppSettings.
-
-    Two docks are available from the View menu: the algorithm panel
-    on the right and the matrix view at the bottom.
-
-    Args:
-        repository: Source of the current graph.
-        layout_service: Service that computes initial node positions.
-        registry: Registry of available graph algorithms.
-        storage: Storage for saving and loading projects.
-        settings: Persisted application settings.
-        add_node_use_case: Use case for adding a node.
-        add_edge_use_case: Use case for adding an edge.
-        remove_node_use_case: Use case for removing a node.
-        remove_edge_use_case: Use case for removing an edge.
-        update_edge_use_case: Use case for updating edge attributes.
-        dark: Whether to start with the dark theme.
+    See the module docstring for the full description. The window
+    owns the current interaction mode, the pending edge source, the
+    node being dragged, the node positions, the algorithm state, the
+    current file path, the dirty flag, and the current theme.
     """
 
     def __init__(
@@ -174,40 +146,25 @@ class MainWindow(QMainWindow):
 
     @property
     def mode(self) -> InteractionMode:
-        """The currently selected interaction mode.
-
-        Returns:
-            The active mode.
-        """
+        """The currently selected interaction mode."""
         return self._mode
 
     def set_mode(self, mode: InteractionMode) -> None:
-        """Switch the interaction mode.
-
-        Clears any pending edge source and any active drag so that
-        the next mouse event starts from a clean state.
-
-        Args:
-            mode: The mode to activate.
-        """
+        """Switch the interaction mode."""
         self._mode = mode
         self._pending_edge_source = None
         self._drag_node = None
         self._restore_mode_message()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Confirm unsaved changes before closing the window.
-
-        Args:
-            event: The close event.
-        """
+        """Confirm unsaved changes before closing the window."""
         if self._confirm_discard_changes():
             event.accept()
         else:
             event.ignore()
 
     def _build_menu(self) -> None:
-        """Create the menu bar with File, View, and Help actions."""
+        """Create the menu bar."""
         file_menu = self.menuBar().addMenu("&File")
 
         new_action = QAction("&New", self)
@@ -276,7 +233,7 @@ class MainWindow(QMainWindow):
             self._mode_actions.append(action)
 
     def _build_status_bar(self) -> None:
-        """Create the status bar with mode and graph stats."""
+        """Create the status bar."""
         self._status_bar = self.statusBar()
         self._stats_label = QLabel("", self)
         self._stats_label.setContentsMargins(0, 0, 8, 0)
@@ -325,11 +282,7 @@ class MainWindow(QMainWindow):
         self._view_menu.addAction(self._dark_theme_action)
 
     def _handle_toggle_theme(self, checked: bool) -> None:
-        """Switch between dark and light themes and persist the choice.
-
-        Args:
-            checked: True for the dark theme, False for the light one.
-        """
+        """Switch between dark and light themes and persist."""
         self._dark = checked
         app = QApplication.instance()
         if isinstance(app, QApplication):
@@ -343,20 +296,12 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage(f"Mode: {self._mode.display_name}")
 
     def _show_temporary_message(self, text: str) -> None:
-        """Show a short-lived status bar message, then restore the mode.
-
-        Args:
-            text: The message to display.
-        """
+        """Show a short-lived status bar message."""
         self._status_bar.showMessage(text)
         QTimer.singleShot(MESSAGE_TIMEOUT_MS, self._restore_mode_message)
 
     def _set_editing_enabled(self, enabled: bool) -> None:
-        """Enable or disable the mode-switching toolbar actions.
-
-        Args:
-            enabled: True to allow mode switching, False to forbid it.
-        """
+        """Enable or disable the mode-switching toolbar actions."""
         for action in self._mode_actions:
             action.setEnabled(enabled)
 
@@ -366,21 +311,21 @@ class MainWindow(QMainWindow):
         self._panel.set_available_nodes(node_ids)
 
     def _update_graph_stats(self) -> None:
-        """Update the permanent graph summary in the status bar."""
+        """Update the graph summary in the status bar."""
         graph = self._repository.get()
         nodes = graph.node_count
         edges = graph.edge_count
         self._stats_label.setText(f"Nodes: {nodes}   Edges: {edges}")
 
     def _update_step_availability(self) -> None:
-        """Refresh the panel's step buttons from the animator state."""
+        """Refresh the panel's step buttons."""
         self._panel.set_step_availability(
             can_step_back=self._animator.can_step_back,
             can_step_forward=self._animator.can_step_forward,
         )
 
     def _update_window_title(self) -> None:
-        """Update the window title to reflect file and dirty state."""
+        """Update the window title."""
         title = APP_NAME
         if self._current_path is not None:
             title = f"{title} - {self._current_path.name}"
@@ -395,19 +340,13 @@ class MainWindow(QMainWindow):
             self._update_window_title()
 
     def _clear_dirty(self) -> None:
-        """Mark the project as clean after a successful save or load."""
+        """Mark the project as clean."""
         if self._dirty:
             self._dirty = False
             self._update_window_title()
 
     def _confirm_discard_changes(self) -> bool:
-        """Ask the user what to do with unsaved changes.
-
-        Returns:
-            True if it is safe to proceed (no changes, or the user
-            saved them, or the user explicitly discarded them).
-            False if the user cancelled.
-        """
+        """Ask the user what to do with unsaved changes."""
         if not self._dirty:
             return True
         box = QMessageBox(self)
@@ -491,23 +430,13 @@ class MainWindow(QMainWindow):
         self._show_temporary_message(f"Opened {path.name}")
 
     def _handle_save_project(self) -> bool:
-        """Save the current project to its path or prompt for one.
-
-        Returns:
-            True if the project was saved, False if the user
-            cancelled or the save failed.
-        """
+        """Save the current project."""
         if self._current_path is None:
             return self._handle_save_project_as()
         return self._save_to(self._current_path)
 
     def _handle_save_project_as(self) -> bool:
-        """Prompt for a path and save the current project there.
-
-        Returns:
-            True if the project was saved, False if the user
-            cancelled or the save failed.
-        """
+        """Prompt for a path and save."""
         path_str, _ = QFileDialog.getSaveFileName(
             self, "Save project", "", PROJECT_FILTER
         )
@@ -519,14 +448,7 @@ class MainWindow(QMainWindow):
         return self._save_to(path)
 
     def _save_to(self, path: Path) -> bool:
-        """Write the current project to the given path.
-
-        Args:
-            path: Destination file path.
-
-        Returns:
-            True if the project was saved, False otherwise.
-        """
+        """Write the project to the given path."""
         try:
             self._storage.save(self._repository.get(), self._positions, path)
         except ProjectStorageError as exc:
@@ -545,17 +467,7 @@ class MainWindow(QMainWindow):
         node_id: int | None,
         edge: tuple[int, int] | None,
     ) -> None:
-        """Dispatch a canvas click according to the active mode.
-
-        Clicks are ignored while any algorithm is loaded, since the
-        graph must remain consistent with the algorithm's history.
-
-        Args:
-            x: Horizontal coordinate of the click in the unit square.
-            y: Vertical coordinate of the click in the unit square.
-            node_id: Id of the node under the cursor, or None.
-            edge: Endpoints of the edge under the cursor, or None.
-        """
+        """Dispatch a canvas click according to the active mode."""
         if self._algorithm_state is not AlgorithmState.IDLE:
             return
         if self._mode is InteractionMode.SELECT:
@@ -571,12 +483,7 @@ class MainWindow(QMainWindow):
             self._handle_delete(node_id, edge)
 
     def _handle_canvas_drag_move(self, x: float, y: float) -> None:
-        """Move the node currently being dragged, if any.
-
-        Args:
-            x: Horizontal coordinate of the cursor in the unit square.
-            y: Vertical coordinate of the cursor in the unit square.
-        """
+        """Move the node currently being dragged, if any."""
         if self._mode is not InteractionMode.SELECT:
             return
         if self._drag_node is None:
@@ -590,12 +497,7 @@ class MainWindow(QMainWindow):
         self._drag_node = None
 
     def _handle_add_node(self, x: float, y: float) -> None:
-        """Add a node at the clicked position.
-
-        Args:
-            x: Horizontal coordinate of the click.
-            y: Vertical coordinate of the click.
-        """
+        """Add a node at the clicked position."""
         graph = self._repository.get()
         new_id = graph.next_id()
         node = self._add_node_use_case.execute(node_id=new_id)
@@ -607,11 +509,7 @@ class MainWindow(QMainWindow):
         self._show_temporary_message(f"Added node {node.id}")
 
     def _handle_add_edge(self, node_id: int | None) -> None:
-        """Add an edge between two consecutively clicked nodes.
-
-        Args:
-            node_id: Id of the node under the cursor, or None.
-        """
+        """Add an edge between two consecutively clicked nodes."""
         if node_id is None:
             self._pending_edge_source = None
             self._show_temporary_message("Add edge: cancelled")
@@ -651,11 +549,7 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_edit_edge(self, edge: tuple[int, int]) -> None:
-        """Open a dialog to change the attributes of an existing edge.
-
-        Args:
-            edge: Endpoints of the edge to edit.
-        """
+        """Open a dialog to change the attributes of an existing edge."""
         source, target = edge
         current = self._find_edge(source, target)
         if current is None:
@@ -693,12 +587,7 @@ class MainWindow(QMainWindow):
         node_id: int | None,
         edge: tuple[int, int] | None,
     ) -> None:
-        """Remove the node or edge under the cursor.
-
-        Args:
-            node_id: Id of the node under the cursor, or None.
-            edge: Endpoints of the edge under the cursor, or None.
-        """
+        """Remove the node or edge under the cursor."""
         if node_id is not None:
             self._handle_delete_node(node_id)
             return
@@ -708,11 +597,7 @@ class MainWindow(QMainWindow):
         self._show_temporary_message("Delete: nothing under cursor")
 
     def _handle_delete_node(self, node_id: int) -> None:
-        """Remove a node and all edges incident to it.
-
-        Args:
-            node_id: Id of the node to remove.
-        """
+        """Remove a node and all edges incident to it."""
         self._remove_node_use_case.execute(node_id=node_id)
         self._positions.pop(node_id, None)
         if self._pending_edge_source == node_id:
@@ -724,11 +609,7 @@ class MainWindow(QMainWindow):
         self._show_temporary_message(f"Deleted node {node_id}")
 
     def _handle_delete_edge(self, edge: tuple[int, int]) -> None:
-        """Remove the edge between two nodes.
-
-        Args:
-            edge: Endpoints of the edge to remove.
-        """
+        """Remove the edge between two nodes."""
         source, target = edge
         self._remove_edge_use_case.execute(source=source, target=target)
         self._mark_dirty()
@@ -742,14 +623,7 @@ class MainWindow(QMainWindow):
         start_node_id: int,
         target_node_id: object,
     ) -> None:
-        """Start or resume an algorithm run.
-
-        Args:
-            algorithm_id: Identifier of the algorithm to run.
-            start_node_id: Id of the node to start from.
-            target_node_id: Id of the target node, or None for
-                algorithms that do not require one.
-        """
+        """Start or resume an algorithm run."""
         if self._algorithm_state in (
             AlgorithmState.PAUSED,
             AlgorithmState.FINISHED,
@@ -822,20 +696,12 @@ class MainWindow(QMainWindow):
         self._refresh_canvas()
 
     def _on_speed_changed(self, interval_ms: int) -> None:
-        """Update the animation speed.
-
-        Args:
-            interval_ms: New delay between steps in milliseconds.
-        """
+        """Update the animation speed."""
         self._current_interval_ms = interval_ms
         self._animator.set_interval(interval_ms)
 
     def _on_step_ready(self, result: object) -> None:
-        """Render the latest algorithm step.
-
-        Args:
-            result: A StepResult emitted by the animator.
-        """
+        """Render the latest algorithm step."""
         if not isinstance(result, StepResult):
             return
         self._panel.set_info(result.info)
@@ -848,16 +714,13 @@ class MainWindow(QMainWindow):
             labels=result.labels,
             node_colors=result.node_colors,
             current_edge=result.current_edge,
+            edge_labels=result.edge_labels,
         )
         self._update_matrix_view(result)
         self._update_step_availability()
 
     def _update_matrix_view(self, result: StepResult) -> None:
-        """Update the matrix dock if the step provides matrix data.
-
-        Args:
-            result: The StepResult of the current step.
-        """
+        """Update the matrix dock if the step provides matrix data."""
         if not result.matrix:
             return
         node_ids = [node.id for node in self._repository.get().nodes()]
