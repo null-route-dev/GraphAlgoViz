@@ -12,6 +12,7 @@ from application.algorithms.dijkstra import Dijkstra
 from application.algorithms.floyd_warshall import FloydWarshall
 from application.algorithms.greedy_coloring import GreedyColoring
 from application.algorithms.kruskal_mst import KruskalMST
+from application.algorithms.max_flow import MaxFlow
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.registry import (
     AlgorithmInfo,
@@ -141,6 +142,7 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "kruskal",
         "tarjan",
         "bridges",
+        "max-flow",
         "coloring",
         "toposort",
     ]
@@ -170,24 +172,17 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("kruskal", graph, 1), KruskalMST)
     assert isinstance(registry.create("tarjan", graph, 1), TarjanSCC)
     assert isinstance(registry.create("bridges", graph, 1), BridgesAndArticulations)
+    assert isinstance(registry.create("max-flow", graph, 1, 3), MaxFlow)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
 
 
-def test_astar_requires_target() -> None:
-    """The registry reports that A* requires a target node."""
+def test_algorithms_requiring_target() -> None:
+    """Only A* and max flow require a target node."""
     registry = build_default_registry()
+    requiring = {info.id for info in registry.all() if info.requires_target}
 
-    assert registry.get("astar").requires_target is True
-
-
-def test_other_algorithms_do_not_require_target() -> None:
-    """All algorithms except A* do not require a target node."""
-    registry = build_default_registry()
-
-    for info in registry.all():
-        if info.id != "astar":
-            assert info.requires_target is False
+    assert requiring == {"astar", "max-flow"}
 
 
 def test_astar_without_target_raises() -> None:
@@ -196,3 +191,11 @@ def test_astar_without_target_raises() -> None:
 
     with pytest.raises(ValueError, match="requires a target"):
         registry.create("astar", build_chain(), 1)
+
+
+def test_max_flow_without_target_raises() -> None:
+    """Creating max flow without a target node raises ValueError."""
+    registry = build_default_registry()
+
+    with pytest.raises(ValueError, match="requires a target"):
+        registry.create("max-flow", build_chain(), 1)

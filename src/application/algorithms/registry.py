@@ -13,6 +13,7 @@ from application.algorithms.dijkstra import Dijkstra
 from application.algorithms.floyd_warshall import FloydWarshall
 from application.algorithms.greedy_coloring import GreedyColoring
 from application.algorithms.kruskal_mst import KruskalMST
+from application.algorithms.max_flow import MaxFlow
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.tarjan_scc import TarjanSCC
 from application.algorithms.topological_sort import TopologicalSort
@@ -44,14 +45,31 @@ def _no_target(
     return wrapper
 
 
-def _astar_factory(
-    graph: Graph,
-    start_node_id: int,
-    target_node_id: int | None,
-) -> BaseAlgorithm:
-    if target_node_id is None:
-        raise ValueError("A* requires a target node")
-    return AStar(graph, start_node_id, target_node_id)
+def _target_required_factory(
+    factory: Callable[[Graph, int, int], BaseAlgorithm],
+    name: str,
+) -> AlgorithmFactory:
+    """Adapt a factory that requires a target into the three-argument form.
+
+    Args:
+        factory: A factory that takes a graph, a start node, and a
+            required target node.
+        name: Display name of the algorithm, used in the error message.
+
+    Returns:
+        A factory that validates and passes the target node.
+    """
+
+    def wrapper(
+        graph: Graph,
+        start_node_id: int,
+        target_node_id: int | None,
+    ) -> BaseAlgorithm:
+        if target_node_id is None:
+            raise ValueError(f"{name} requires a target node")
+        return factory(graph, start_node_id, target_node_id)
+
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -62,10 +80,8 @@ class AlgorithmInfo:
         id: Unique stable identifier used for programmatic lookup.
         display_name: Human-readable name shown in the UI.
         description: Short explanation of what the algorithm does.
-        factory: Callable that creates an algorithm instance from a
-            graph, a start node id, and an optional target node id.
-        requires_target: Whether the algorithm needs a target node to
-            run. The UI uses this flag to show the target selector.
+        factory: Callable that creates an algorithm instance.
+        requires_target: Whether the algorithm needs a target node.
     """
 
     id: str
@@ -163,11 +179,7 @@ def build_default_registry() -> AlgorithmRegistry:
     """Return a registry pre-populated with the built-in algorithms.
 
     Returns:
-        A new registry containing depth-first search, breadth-first
-        search, Dijkstra, A*, Bellman-Ford, Floyd-Warshall, Prim's
-        and Kruskal's minimum spanning trees, Tarjan's SCC, bridges
-        and articulation points, greedy coloring, and topological
-        sort.
+        A new registry containing all built-in algorithms.
     """
     registry = AlgorithmRegistry()
     registry.register(
@@ -211,7 +223,7 @@ def build_default_registry() -> AlgorithmRegistry:
                 "Finds the shortest path to a target node using a "
                 "heuristic to guide the search."
             ),
-            factory=_astar_factory,
+            factory=_target_required_factory(AStar, "A*"),
             requires_target=True,
         )
     )
@@ -280,6 +292,18 @@ def build_default_registry() -> AlgorithmRegistry:
                 "nodes whose removal does the same."
             ),
             factory=_no_target(BridgesAndArticulations),
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="max-flow",
+            display_name="Maximum Flow (Edmonds-Karp)",
+            description=(
+                "Computes the maximum flow from a source to a sink "
+                "using the Edmonds-Karp algorithm."
+            ),
+            factory=_target_required_factory(MaxFlow, "Maximum flow"),
+            requires_target=True,
         )
     )
     registry.register(
