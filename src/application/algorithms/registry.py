@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from application.algorithms.astar import AStar
 from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
+from application.algorithms.bipartite_check import BipartiteCheck
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.bridges_articulations import BridgesAndArticulations
 from application.algorithms.depth_first_search import DepthFirstSearch
@@ -304,6 +305,17 @@ def build_default_registry() -> AlgorithmRegistry:
             ),
             factory=_target_required_factory(MaxFlow, "Maximum flow"),
             requires_target=True,
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="bipartite",
+            display_name="Bipartite Check",
+            description=(
+                "Checks whether the graph can be split into two "
+                "independent sets by attempting a two-coloring."
+            ),
+            factory=_no_target(BipartiteCheck),
         )
     )
     registry.register(
