@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from application.algorithms.registry import AlgorithmRegistry
 from application.algorithms.step_result import StepResult
+from application.history import EditHistory, GraphState, snapshot
 from application.project_storage import ProjectStorage, ProjectStorageError
 from application.services.layout_service import LayoutService
 from application.use_cases.add_edge import AddEdgeUseCase
@@ -73,10 +74,38 @@ MODE_SHORTCUTS: dict[InteractionMode, str] = {
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and docks.
 
-    See the module docstring for the full description. The window
-    owns the current interaction mode, the pending edge source, the
-    node being dragged, the node positions, the algorithm state, the
-    current file path, the dirty flag, and the current theme.
+    The window owns the current interaction mode, the pending edge
+    source, the node being dragged, the node positions, the algorithm
+    state, the current file path, the edit history, and the theme.
+
+    Every mutation of the graph or of node positions is followed by a
+    commit that pushes a full snapshot into the edit history. Undo and
+    Redo move the history cursor and restore the corresponding state.
+    The dirty flag is derived from the history: the project is dirty
+    if the current state differs from the last saved one, which
+    includes the case where an undo returns to the saved state.
+
+    New, Open, and window close ask the user to save first if the
+    history is dirty. Editing is locked while an algorithm is loaded
+    in any state except IDLE; Undo and Redo are locked with it.
+
+    Interaction modes can be switched from the toolbar or with the
+    number keys 1 through 4. The theme is persisted through
+    AppSettings. Two docks are available from the View menu: the
+    algorithm panel on the right and the matrix view at the bottom.
+
+    Args:
+        repository: Source of the current graph.
+        layout_service: Service that computes initial node positions.
+        registry: Registry of available graph algorithms.
+        storage: Storage for saving and loading projects.
+        settings: Persisted application settings.
+        add_node_use_case: Use case for adding a node.
+        add_edge_use_case: Use case for adding an edge.
+        remove_node_use_case: Use case for removing a node.
+        remove_edge_use_case: Use case for removing an edge.
+        update_edge_use_case: Use case for updating edge attributes.
+        dark: Whether to start with the dark theme.
     """
 
     def __init__(
@@ -109,11 +138,15 @@ class MainWindow(QMainWindow):
         self._mode = InteractionMode.SELECT
         self._pending_edge_source: int | None = None
         self._drag_node: int | None = None
+        self._drag_changed = False
         self._algorithm_state = AlgorithmState.IDLE
         self._current_interval_ms = BASE_INTERVAL_MS // DEFAULT_SPEED
         self._current_path: Path | None = None
-        self._dirty = False
         self._dark = dark
+        self._editing_enabled = True
+
+        self._history = EditHistory(snapshot(repository.get(), self._positions))
+        self._history.mark_saved()
 
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 700)
@@ -133,6 +166,8 @@ class MainWindow(QMainWindow):
 
         self._mode_actions: list[QAction] = []
         self._view_menu: QMenu | None = None
+        self._undo_action: QAction | None = None
+        self._redo_action: QAction | None = None
         self._build_menu()
         self._build_toolbar()
         self._build_status_bar()
@@ -143,28 +178,45 @@ class MainWindow(QMainWindow):
         self._sync_available_nodes()
         self._update_graph_stats()
         self._update_step_availability()
+        self._refresh_undo_redo_actions()
 
     @property
     def mode(self) -> InteractionMode:
-        """The currently selected interaction mode."""
+        """The currently selected interaction mode.
+
+        Returns:
+            The active mode.
+        """
         return self._mode
 
     def set_mode(self, mode: InteractionMode) -> None:
-        """Switch the interaction mode."""
+        """Switch the interaction mode.
+
+        Clears any pending edge source and any active drag so that
+        the next mouse event starts from a clean state.
+
+        Args:
+            mode: The mode to activate.
+        """
         self._mode = mode
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_changed = False
         self._restore_mode_message()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Confirm unsaved changes before closing the window."""
+        """Confirm unsaved changes before closing the window.
+
+        Args:
+            event: The close event.
+        """
         if self._confirm_discard_changes():
             event.accept()
         else:
             event.ignore()
 
     def _build_menu(self) -> None:
-        """Create the menu bar."""
+        """Create the menu bar with File, Edit, View, and Help menus."""
         file_menu = self.menuBar().addMenu("&File")
 
         new_action = QAction("&New", self)
@@ -195,6 +247,18 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        edit_menu = self.menuBar().addMenu("&Edit")
+
+        self._undo_action = QAction("&Undo", self)
+        self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self._undo_action.triggered.connect(self._handle_undo)
+        edit_menu.addAction(self._undo_action)
+
+        self._redo_action = QAction("&Redo", self)
+        self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self._redo_action.triggered.connect(self._handle_redo)
+        edit_menu.addAction(self._redo_action)
 
         self._view_menu = self.menuBar().addMenu("&View")
 
@@ -233,7 +297,7 @@ class MainWindow(QMainWindow):
             self._mode_actions.append(action)
 
     def _build_status_bar(self) -> None:
-        """Create the status bar."""
+        """Create the status bar with mode and graph stats."""
         self._status_bar = self.statusBar()
         self._stats_label = QLabel("", self)
         self._stats_label.setContentsMargins(0, 0, 8, 0)
@@ -282,7 +346,11 @@ class MainWindow(QMainWindow):
         self._view_menu.addAction(self._dark_theme_action)
 
     def _handle_toggle_theme(self, checked: bool) -> None:
-        """Switch between dark and light themes and persist."""
+        """Switch between dark and light themes and persist the choice.
+
+        Args:
+            checked: True for the dark theme, False for the light one.
+        """
         self._dark = checked
         app = QApplication.instance()
         if isinstance(app, QApplication):
@@ -296,14 +364,31 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage(f"Mode: {self._mode.display_name}")
 
     def _show_temporary_message(self, text: str) -> None:
-        """Show a short-lived status bar message."""
+        """Show a short-lived status bar message.
+
+        Args:
+            text: The message to display.
+        """
         self._status_bar.showMessage(text)
         QTimer.singleShot(MESSAGE_TIMEOUT_MS, self._restore_mode_message)
 
     def _set_editing_enabled(self, enabled: bool) -> None:
-        """Enable or disable the mode-switching toolbar actions."""
+        """Enable or disable editing, undo, and redo.
+
+        Args:
+            enabled: True to allow editing, False to forbid it.
+        """
+        self._editing_enabled = enabled
         for action in self._mode_actions:
             action.setEnabled(enabled)
+        self._refresh_undo_redo_actions()
+
+    def _refresh_undo_redo_actions(self) -> None:
+        """Update the enabled state of the Undo and Redo actions."""
+        if self._undo_action is None or self._redo_action is None:
+            return
+        self._undo_action.setEnabled(self._editing_enabled and self._history.can_undo())
+        self._redo_action.setEnabled(self._editing_enabled and self._history.can_redo())
 
     def _sync_available_nodes(self) -> None:
         """Update the panel's node lists from the current graph."""
@@ -329,25 +414,64 @@ class MainWindow(QMainWindow):
         title = APP_NAME
         if self._current_path is not None:
             title = f"{title} - {self._current_path.name}"
-        if self._dirty:
+        if self._history.is_dirty():
             title = f"{title} *"
         self.setWindowTitle(title)
 
-    def _mark_dirty(self) -> None:
-        """Mark the project as having unsaved changes."""
-        if not self._dirty:
-            self._dirty = True
-            self._update_window_title()
+    def _commit(self) -> None:
+        """Snapshot the current state and push it to the edit history."""
+        state = snapshot(self._repository.get(), self._positions)
+        self._history.push(state)
+        self._refresh_undo_redo_actions()
+        self._update_window_title()
 
-    def _clear_dirty(self) -> None:
-        """Mark the project as clean."""
-        if self._dirty:
-            self._dirty = False
-            self._update_window_title()
+    def _restore(self, state: GraphState) -> None:
+        """Replace the live graph and positions with a snapshot.
+
+        Args:
+            state: The snapshot to restore.
+        """
+        import copy as _copy
+
+        self._repository.save(_copy.deepcopy(state.graph))
+        self._positions = dict(state.positions)
+        self._pending_edge_source = None
+        self._drag_node = None
+        self._drag_changed = False
+        self._sync_available_nodes()
+        self._update_graph_stats()
+        self._refresh_canvas()
+        self._refresh_undo_redo_actions()
+        self._update_window_title()
+
+    def _handle_undo(self) -> None:
+        """Undo the last committed change."""
+        if not self._editing_enabled:
+            return
+        if not self._history.can_undo():
+            return
+        state = self._history.undo()
+        self._restore(state)
+        self._show_temporary_message("Undo")
+
+    def _handle_redo(self) -> None:
+        """Redo the last undone change."""
+        if not self._editing_enabled:
+            return
+        if not self._history.can_redo():
+            return
+        state = self._history.redo()
+        self._restore(state)
+        self._show_temporary_message("Redo")
 
     def _confirm_discard_changes(self) -> bool:
-        """Ask the user what to do with unsaved changes."""
-        if not self._dirty:
+        """Ask the user what to do with unsaved changes.
+
+        Returns:
+            True if it is safe to proceed, False if the user
+            cancelled.
+        """
+        if not self._history.is_dirty():
             return True
         box = QMessageBox(self)
         box.setWindowTitle(UNSAVED_TITLE)
@@ -393,11 +517,13 @@ class MainWindow(QMainWindow):
         self._current_path = None
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_changed = False
         self._reset_algorithm()
+        self._history.reset(snapshot(self._repository.get(), self._positions))
         self._sync_available_nodes()
         self._refresh_canvas()
         self._update_graph_stats()
-        self._clear_dirty()
+        self._refresh_undo_redo_actions()
         self._update_window_title()
         self._show_temporary_message("New project")
 
@@ -421,11 +547,13 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_changed = False
         self._reset_algorithm()
+        self._history.reset(snapshot(self._repository.get(), self._positions))
         self._sync_available_nodes()
         self._refresh_canvas()
         self._update_graph_stats()
-        self._clear_dirty()
+        self._refresh_undo_redo_actions()
         self._update_window_title()
         self._show_temporary_message(f"Opened {path.name}")
 
@@ -455,7 +583,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save failed", str(exc))
             return False
         self._current_path = path
-        self._clear_dirty()
+        self._history.mark_saved()
         self._update_window_title()
         self._show_temporary_message(f"Saved to {path.name}")
         return True
@@ -473,6 +601,7 @@ class MainWindow(QMainWindow):
         if self._mode is InteractionMode.SELECT:
             if node_id is not None:
                 self._drag_node = node_id
+                self._drag_changed = False
             elif edge is not None:
                 self._handle_edit_edge(edge)
         elif self._mode is InteractionMode.ADD_NODE:
@@ -489,12 +618,15 @@ class MainWindow(QMainWindow):
         if self._drag_node is None:
             return
         self._positions[self._drag_node] = Position(x=x, y=y)
-        self._mark_dirty()
+        self._drag_changed = True
         self._refresh_canvas()
 
     def _handle_canvas_drag_end(self) -> None:
         """Finish any active drag."""
         self._drag_node = None
+        if self._drag_changed:
+            self._drag_changed = False
+            self._commit()
 
     def _handle_add_node(self, x: float, y: float) -> None:
         """Add a node at the clicked position."""
@@ -502,7 +634,7 @@ class MainWindow(QMainWindow):
         new_id = graph.next_id()
         node = self._add_node_use_case.execute(node_id=new_id)
         self._positions[node.id] = Position(x=x, y=y)
-        self._mark_dirty()
+        self._commit()
         self._sync_available_nodes()
         self._update_graph_stats()
         self._refresh_canvas()
@@ -541,7 +673,7 @@ class MainWindow(QMainWindow):
             weight=attributes.weight,
             directed=attributes.directed,
         )
-        self._mark_dirty()
+        self._commit()
         self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(
@@ -568,7 +700,7 @@ class MainWindow(QMainWindow):
             weight=attributes.weight,
             directed=attributes.directed,
         )
-        self._mark_dirty()
+        self._commit()
         self._refresh_canvas()
         self._show_temporary_message(
             f"Edge {source} -> {target} updated (weight {attributes.weight:g})"
@@ -602,7 +734,7 @@ class MainWindow(QMainWindow):
         self._positions.pop(node_id, None)
         if self._pending_edge_source == node_id:
             self._pending_edge_source = None
-        self._mark_dirty()
+        self._commit()
         self._sync_available_nodes()
         self._update_graph_stats()
         self._refresh_canvas()
@@ -612,7 +744,7 @@ class MainWindow(QMainWindow):
         """Remove the edge between two nodes."""
         source, target = edge
         self._remove_edge_use_case.execute(source=source, target=target)
-        self._mark_dirty()
+        self._commit()
         self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted edge {source} -> {target}")
@@ -648,6 +780,7 @@ class MainWindow(QMainWindow):
         self._mode = InteractionMode.SELECT
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_changed = False
         self._set_editing_enabled(False)
         self._algorithm_state = AlgorithmState.RUNNING
         self._panel.set_state(AlgorithmState.RUNNING)
