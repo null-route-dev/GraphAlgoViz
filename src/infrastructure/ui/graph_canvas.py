@@ -2,18 +2,62 @@
 
 import math
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from matplotlib.patches import FancyArrowPatch
+from matplotlib.patches import FancyArrowPatch, Rectangle
 from PySide6.QtCore import QTimer
 
 from domain.entities.edge import Edge
 from domain.entities.graph import Graph
 from domain.value_objects.position import Position
 
-ClickCallback = Callable[[float, float, int | None, tuple[int, int] | None], None]
+
+@dataclass(frozen=True)
+class ClickEvent:
+    """A left-button press on the canvas.
+
+    Args:
+        x: Horizontal coordinate in the unit square.
+        y: Vertical coordinate in the unit square.
+        node_id: Id of the node under the cursor, or None.
+        edge: Endpoints of the edge under the cursor, or None. Only
+            set when no node was hit.
+        shift: Whether Shift was held.
+        double: Whether this was the second click of a double-click.
+    """
+
+    x: float
+    y: float
+    node_id: int | None
+    edge: tuple[int, int] | None
+    shift: bool
+    double: bool
+
+
+@dataclass(frozen=True)
+class SelectionEvent:
+    """A completed rubber-band selection.
+
+    Args:
+        x1: Left edge of the selection in the unit square.
+        y1: Bottom edge of the selection in the unit square.
+        x2: Right edge of the selection in the unit square.
+        y2: Top edge of the selection in the unit square.
+        additive: Whether Shift was held when the selection started.
+    """
+
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    additive: bool
+
+
+ClickCallback = Callable[[ClickEvent], None]
+SelectionCallback = Callable[[SelectionEvent], None]
 DragMoveCallback = Callable[[float, float], None]
 DragEndCallback = Callable[[], None]
 
@@ -24,6 +68,8 @@ NODE_VISUAL_RADIUS = 0.025
 COLOR_DEFAULT = "#1f77b4"
 COLOR_HIGHLIGHTED = "#ff7f0e"
 COLOR_CURRENT = "#d62728"
+COLOR_SELECTED = "#2ca02c"
+SELECTED_BORDER_WIDTH = 3.5
 
 ARROW_MUTATION_SCALE = 14
 CURRENT_BORDER_WIDTH = 2.5
@@ -32,6 +78,9 @@ TRANSITION_FRAME_MS = 20
 TRANSITION_STEP = 0.18
 
 ARC_SPACING = 0.18
+
+SELECTION_FILL = "#1f77b4"
+SELECTION_ALPHA = 0.15
 
 DARK_BG = "#1e1e1e"
 DARK_NODE_BORDER = "#cccccc"
@@ -53,35 +102,22 @@ class GraphCanvas(FigureCanvasQTAgg):
 
     Positions are expected in the unit square (0..1); the canvas maps
     them to its axes without knowing about pixels. The canvas does not
-    own the graph or its positions — it reads them on every draw and
-    remembers the last drawn state only to resolve clicks to node ids
-    and edges.
+    own the graph or its positions — it reads them on every draw.
 
-    Node fill colors come from the algorithm's step result, if any.
-    When a node has no explicit color, the canvas falls back to its
-    default palette: orange for visited nodes, red for the current
-    node, blue otherwise.
-
-    Edge labels override the default edge weight display when present.
-    Algorithms that annotate edges, such as max flow, provide labels
-    like "3/5" for flow over capacity.
-
-    A single edge may be marked as current in the step result. That
-    edge is drawn with a dashed line in the highlighted color to show
-    that the algorithm is considering it right now.
-
-    Edges between the same pair of nodes are drawn as arcs.
-
-    The canvas supports a dark and a light theme.
-
-    Color changes are animated across a few frames.
+    Mouse activity is reported via three optional callbacks: a click
+    (with modifiers), a completed rubber-band selection, and drag
+    motion. The canvas draws the rubber band itself while the user is
+    dragging on empty space.
 
     Args:
         parent: Optional Qt parent widget.
         on_click: Optional callback invoked on left button press.
+        on_selection_complete: Optional callback invoked when a
+            rubber-band selection finishes.
         on_drag_move: Optional callback invoked on mouse motion while
-            the left button is held down after a press over a node.
-        on_drag_end: Optional callback invoked on left button release.
+            the left button is held down.
+        on_drag_end: Optional callback invoked on left button release
+            when no rubber band was active.
         dark: Whether to start with the dark theme.
     """
 
@@ -89,6 +125,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self,
         parent: object | None = None,
         on_click: ClickCallback | None = None,
+        on_selection_complete: SelectionCallback | None = None,
         on_drag_move: DragMoveCallback | None = None,
         on_drag_end: DragEndCallback | None = None,
         dark: bool = True,
@@ -110,6 +147,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._configure_axes()
 
         self._on_click = on_click
+        self._on_selection_complete = on_selection_complete
         self._on_drag_move = on_drag_move
         self._on_drag_end = on_drag_end
 
@@ -121,6 +159,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_highlighted_edges: frozenset[tuple[int, int]] = frozenset()
         self._last_labels: dict[int, str] = {}
         self._last_edge_labels: dict[tuple[int, int], str] = {}
+        self._last_selected_nodes: frozenset[int] = frozenset()
 
         self._colors_start: dict[int, str] = {}
         self._colors_target: dict[int, str] = {}
@@ -132,6 +171,11 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._transition_timer.timeout.connect(self._on_transition_tick)
 
         self._pressed_node: int | None = None
+        self._selection_start: tuple[float, float] | None = None
+        self._selection_current: tuple[float, float] | None = None
+        self._selection_additive = False
+        self._selecting = False
+
         self.mpl_connect("button_press_event", self._handle_press)
         self.mpl_connect("motion_notify_event", self._handle_motion)
         self.mpl_connect("button_release_event", self._handle_release)
@@ -174,8 +218,9 @@ class GraphCanvas(FigureCanvasQTAgg):
         node_colors: dict[int, str] | None = None,
         current_edge: tuple[int, int] | None = None,
         edge_labels: dict[tuple[int, int], str] | None = None,
+        selected_nodes: frozenset[int] = frozenset(),
     ) -> None:
-        """Render the graph on the canvas with animated color changes.
+        """Render the graph on the canvas.
 
         Args:
             graph: The graph to render.
@@ -185,10 +230,9 @@ class GraphCanvas(FigureCanvasQTAgg):
             highlighted_edges: Edges to emphasize.
             labels: Optional per-node text labels.
             node_colors: Optional per-node fill colors as hex strings.
-            current_edge: Optional edge to draw as the one being
-                considered by the algorithm.
-            edge_labels: Optional per-edge text labels that override
-                the default edge weight display.
+            current_edge: Optional edge being considered.
+            edge_labels: Optional per-edge text labels.
+            selected_nodes: Ids of nodes to draw as selected.
         """
         self._last_graph = graph
         self._last_positions = dict(positions)
@@ -198,6 +242,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_highlighted_edges = highlighted_edges
         self._last_labels = dict(labels or {})
         self._last_edge_labels = dict(edge_labels or {})
+        self._last_selected_nodes = selected_nodes
 
         new_targets: dict[int, str] = {}
         for node in graph.nodes():
@@ -271,8 +316,29 @@ class GraphCanvas(FigureCanvasQTAgg):
             self._last_current_node,
             self._last_labels,
             self._colors_displayed,
+            self._last_selected_nodes,
         )
+        self._draw_selection_rectangle()
         self.draw()
+
+    def _draw_selection_rectangle(self) -> None:
+        if not self._selecting:
+            return
+        if self._selection_start is None or self._selection_current is None:
+            return
+        x1, y1 = self._selection_start
+        x2, y2 = self._selection_current
+        rect = Rectangle(
+            (min(x1, x2), min(y1, y2)),
+            abs(x2 - x1),
+            abs(y2 - y1),
+            linewidth=1.0,
+            edgecolor=SELECTION_FILL,
+            facecolor=SELECTION_FILL,
+            alpha=SELECTION_ALPHA,
+            zorder=10,
+        )
+        self._axes.add_patch(rect)
 
     def _draw_edges(
         self,
@@ -398,6 +464,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         current: int | None,
         labels: dict[int, str],
         node_colors: dict[int, str],
+        selected: frozenset[int],
     ) -> None:
         for node in graph.nodes():
             if node.id not in positions:
@@ -408,8 +475,16 @@ class GraphCanvas(FigureCanvasQTAgg):
                 self._resolve_fill_color(node.id, highlighted, current, node_colors),
             )
             is_current = node.id == current
-            border_color = COLOR_CURRENT if is_current else self._node_border_color
-            border_width = CURRENT_BORDER_WIDTH if is_current else 1.0
+            is_selected = node.id in selected
+            if is_selected:
+                border_color = COLOR_SELECTED
+                border_width = SELECTED_BORDER_WIDTH
+            elif is_current:
+                border_color = COLOR_CURRENT
+                border_width = CURRENT_BORDER_WIDTH
+            else:
+                border_color = self._node_border_color
+                border_width = 1.0
             self._axes.plot(
                 position.x,
                 position.y,
@@ -437,6 +512,17 @@ class GraphCanvas(FigureCanvasQTAgg):
                     labels[node.id],
                     ha="center",
                     va="bottom",
+                    color=self._node_label_color,
+                    fontsize=9,
+                    zorder=3,
+                )
+            if node.label:
+                self._axes.text(
+                    position.x,
+                    position.y - 0.07,
+                    node.label,
+                    ha="center",
+                    va="top",
                     color=self._node_label_color,
                     fontsize=9,
                     zorder=3,
@@ -471,9 +557,32 @@ class GraphCanvas(FigureCanvasQTAgg):
         y = float(event.ydata)
         node_id = self._find_node_at(x, y)
         edge = None if node_id is not None else self._find_edge_at(x, y)
+        shift = "shift" in (event.key or "")
+        double = bool(event.dblclick)
+
         self._pressed_node = node_id
+        if node_id is None:
+            self._selection_start = (x, y)
+            self._selection_current = (x, y)
+            self._selection_additive = shift
+            self._selecting = False
+        else:
+            self._selection_start = None
+            self._selection_current = None
+            self._selection_additive = False
+            self._selecting = False
+
         if self._on_click is not None:
-            self._on_click(x, y, node_id, edge)
+            self._on_click(
+                ClickEvent(
+                    x=x,
+                    y=y,
+                    node_id=node_id,
+                    edge=edge,
+                    shift=shift,
+                    double=double,
+                )
+            )
 
     def _handle_motion(self, event: Any) -> None:
         """Handle mouse motion while the left button is held down.
@@ -483,12 +592,20 @@ class GraphCanvas(FigureCanvasQTAgg):
         """
         if event.button != 1:
             return
-        if self._pressed_node is None:
-            return
         if event.xdata is None or event.ydata is None:
             return
-        if self._on_drag_move is not None:
-            self._on_drag_move(float(event.xdata), float(event.ydata))
+        x = float(event.xdata)
+        y = float(event.ydata)
+
+        if self._pressed_node is not None:
+            if self._on_drag_move is not None:
+                self._on_drag_move(x, y)
+            return
+
+        if self._selection_start is not None:
+            self._selection_current = (x, y)
+            self._selecting = True
+            self._redraw()
 
     def _handle_release(self, event: Any) -> None:
         """Handle the release of the left mouse button.
@@ -498,8 +615,33 @@ class GraphCanvas(FigureCanvasQTAgg):
         """
         if event.button != 1:
             return
+        was_selecting = self._selecting
+        start = self._selection_start
+        current = self._selection_current
+        additive = self._selection_additive
+
         self._pressed_node = None
-        if self._on_drag_end is not None:
+        self._selection_start = None
+        self._selection_current = None
+        self._selecting = False
+        self._selection_additive = False
+
+        if (
+            was_selecting
+            and start is not None
+            and current is not None
+            and self._on_selection_complete is not None
+        ):
+            self._on_selection_complete(
+                SelectionEvent(
+                    x1=min(start[0], current[0]),
+                    y1=min(start[1], current[1]),
+                    x2=max(start[0], current[0]),
+                    y2=max(start[1], current[1]),
+                    additive=additive,
+                )
+            )
+        elif self._on_drag_end is not None:
             self._on_drag_end()
 
     def _find_node_at(self, x: float, y: float) -> int | None:
@@ -510,8 +652,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             y: Vertical coordinate of the point.
 
         Returns:
-            The id of the closest node within NODE_HIT_RADIUS, or
-            None.
+            The id of the closest node within NODE_HIT_RADIUS, or None.
         """
         if self._last_graph is None:
             return None
@@ -535,8 +676,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             y: Vertical coordinate of the point.
 
         Returns:
-            The (source, target) pair of the closest edge within
-            EDGE_HIT_RADIUS, or None.
+            The (source, target) pair of the closest edge, or None.
         """
         if self._last_graph is None:
             return None
@@ -563,8 +703,7 @@ def _group_edges_by_endpoints(
         edges: The edges to group.
 
     Returns:
-        A mapping from the sorted endpoint pair to the list of edges
-        connecting those endpoints, in the original order.
+        A mapping from the sorted endpoint pair to the list of edges.
     """
     groups: dict[tuple[int, int], list[Edge]] = {}
     for edge in edges:
@@ -598,8 +737,7 @@ def _effective_rad(
     Args:
         edge: The edge being drawn.
         key: The sorted endpoint pair shared by the group.
-        rad: The curvature for the edge's slot, relative to the
-            canonical direction.
+        rad: The curvature for the edge's slot.
 
     Returns:
         The signed curvature to pass to the drawing routine.
@@ -709,9 +847,7 @@ def _shorten_towards(
         distance: How far to move from end towards start.
 
     Returns:
-        A new position between start and end, at the given distance
-        from end. If the segment is shorter than the requested
-        distance, returns start.
+        A new position between start and end.
     """
     total = math.hypot(end.x - start.x, end.y - start.y)
     if total <= distance:
