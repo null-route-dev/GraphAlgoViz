@@ -1,11 +1,4 @@
-"""Application settings persisted with QSettings.
-
-QSettings stores key-value pairs in a platform-specific location:
-the registry on Windows, plist files on macOS, and ini files under
-``~/.config`` on Linux. This module wraps QSettings with a typed API
-so that the rest of the application does not deal with raw strings
-and type conversions.
-"""
+"""Application settings persisted with QSettings."""
 
 from PySide6.QtCore import QSettings
 
@@ -13,7 +6,10 @@ ORG_NAME = "GraphAlgoViz"
 APP_NAME = "GraphAlgoViz"
 
 KEY_DARK_THEME = "ui/dark_theme"
+KEY_SNAP_TO_GRID = "ui/snap_to_grid"
+
 DEFAULT_DARK_THEME = True
+DEFAULT_SNAP_TO_GRID = False
 
 
 class AppSettings:
@@ -21,9 +17,7 @@ class AppSettings:
 
     Args:
         settings: Optional QSettings instance to use. When omitted, a
-            QSettings for ORG_NAME and APP_NAME is created. Tests pass
-            an instance backed by a temporary file to avoid touching
-            the user's real settings.
+            QSettings for ORG_NAME and APP_NAME is created.
     """
 
     def __init__(self, settings: QSettings | None = None) -> None:
@@ -33,15 +27,9 @@ class AppSettings:
         """Return whether the dark theme is enabled.
 
         Returns:
-            True if the dark theme was selected on the previous run,
-            or the default value if no preference was saved.
+            True if the dark theme was selected on the previous run.
         """
-        value = self._settings.value(KEY_DARK_THEME, DEFAULT_DARK_THEME)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.lower() in ("true", "1", "yes")
-        return bool(value)
+        return self._read_bool(KEY_DARK_THEME, DEFAULT_DARK_THEME)
 
     def set_dark_theme(self, dark: bool) -> None:
         """Persist the dark theme preference.
@@ -49,5 +37,32 @@ class AppSettings:
         Args:
             dark: True for the dark theme, False for the light one.
         """
-        self._settings.setValue(KEY_DARK_THEME, dark)
+        self._write_bool(KEY_DARK_THEME, dark)
+
+    def snap_to_grid(self) -> bool:
+        """Return whether snap-to-grid is enabled.
+
+        Returns:
+            True if nodes should snap to grid during drag and creation.
+        """
+        return self._read_bool(KEY_SNAP_TO_GRID, DEFAULT_SNAP_TO_GRID)
+
+    def set_snap_to_grid(self, enabled: bool) -> None:
+        """Persist the snap-to-grid preference.
+
+        Args:
+            enabled: True to enable snapping, False to disable.
+        """
+        self._write_bool(KEY_SNAP_TO_GRID, enabled)
+
+    def _read_bool(self, key: str, default: bool) -> bool:
+        value = self._settings.value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ("true", "1", "yes")
+        return bool(value)
+
+    def _write_bool(self, key: str, value: bool) -> None:
+        self._settings.setValue(key, value)
         self._settings.sync()
