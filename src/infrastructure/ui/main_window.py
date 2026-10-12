@@ -1,5 +1,6 @@
 """Main application window."""
 
+import copy
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -25,7 +26,9 @@ from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
 from application.use_cases.remove_node import RemoveNodeUseCase
 from application.use_cases.update_edge import UpdateEdgeUseCase
+from application.use_cases.update_node import UpdateNodeUseCase
 from domain.entities.edge import Edge
+from domain.entities.node import Node
 from domain.interfaces.graph_repository import GraphRepository
 from domain.value_objects.position import Position
 from infrastructure.animation.algorithm_animator import AlgorithmAnimator
@@ -34,7 +37,14 @@ from infrastructure.ui.algorithm_panel import AlgorithmPanel, AlgorithmState
 from infrastructure.ui.dialogs.edge_attributes_dialog import (
     EdgeAttributesDialog,
 )
-from infrastructure.ui.graph_canvas import GraphCanvas
+from infrastructure.ui.dialogs.node_attributes_dialog import (
+    NodeAttributesDialog,
+)
+from infrastructure.ui.graph_canvas import (
+    ClickEvent,
+    GraphCanvas,
+    SelectionEvent,
+)
 from infrastructure.ui.interaction_mode import InteractionMode
 from infrastructure.ui.matrix_view import MatrixView
 from infrastructure.ui.theme import apply_theme
@@ -63,6 +73,9 @@ ABOUT_TEXT = (
 
 DEFAULT_DARK = True
 
+GRID_SIZE = 0.05
+PASTE_OFFSET = 0.05
+
 MODE_SHORTCUTS: dict[InteractionMode, str] = {
     InteractionMode.SELECT: "1",
     InteractionMode.ADD_NODE: "2",
@@ -71,41 +84,27 @@ MODE_SHORTCUTS: dict[InteractionMode, str] = {
 }
 
 
+def _snap(value: float) -> float:
+    """Round a coordinate to the nearest grid point.
+
+    Args:
+        value: The coordinate to snap.
+
+    Returns:
+        The nearest multiple of GRID_SIZE.
+    """
+    return round(value / GRID_SIZE) * GRID_SIZE
+
+
+ClipboardData = tuple[list[Node], list[Edge]]
+
+
 class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and docks.
 
-    The window owns the current interaction mode, the pending edge
-    source, the node being dragged, the node positions, the algorithm
-    state, the current file path, the edit history, and the theme.
-
-    Every mutation of the graph or of node positions is followed by a
-    commit that pushes a full snapshot into the edit history. Undo and
-    Redo move the history cursor and restore the corresponding state.
-    The dirty flag is derived from the history: the project is dirty
-    if the current state differs from the last saved one, which
-    includes the case where an undo returns to the saved state.
-
-    New, Open, and window close ask the user to save first if the
-    history is dirty. Editing is locked while an algorithm is loaded
-    in any state except IDLE; Undo and Redo are locked with it.
-
-    Interaction modes can be switched from the toolbar or with the
-    number keys 1 through 4. The theme is persisted through
-    AppSettings. Two docks are available from the View menu: the
-    algorithm panel on the right and the matrix view at the bottom.
-
-    Args:
-        repository: Source of the current graph.
-        layout_service: Service that computes initial node positions.
-        registry: Registry of available graph algorithms.
-        storage: Storage for saving and loading projects.
-        settings: Persisted application settings.
-        add_node_use_case: Use case for adding a node.
-        add_edge_use_case: Use case for adding an edge.
-        remove_node_use_case: Use case for removing a node.
-        remove_edge_use_case: Use case for removing an edge.
-        update_edge_use_case: Use case for updating edge attributes.
-        dark: Whether to start with the dark theme.
+    The window owns the interaction mode, node positions, edit
+    history, selection, clipboard, theme, snap-to-grid flag, and
+    algorithm state. Every mutation is followed by a history commit.
     """
 
     def __init__(
@@ -120,6 +119,7 @@ class MainWindow(QMainWindow):
         remove_node_use_case: RemoveNodeUseCase,
         remove_edge_use_case: RemoveEdgeUseCase,
         update_edge_use_case: UpdateEdgeUseCase,
+        update_node_use_case: UpdateNodeUseCase,
         dark: bool = DEFAULT_DARK,
     ) -> None:
         super().__init__()
@@ -133,16 +133,22 @@ class MainWindow(QMainWindow):
         self._remove_node_use_case = remove_node_use_case
         self._remove_edge_use_case = remove_edge_use_case
         self._update_edge_use_case = update_edge_use_case
+        self._update_node_use_case = update_node_use_case
 
         self._positions = layout_service.circular(repository.get())
         self._mode = InteractionMode.SELECT
         self._pending_edge_source: int | None = None
+        self._selected_nodes: set[int] = set()
         self._drag_node: int | None = None
+        self._drag_click: tuple[float, float] | None = None
+        self._drag_initial_positions: dict[int, Position] = {}
         self._drag_changed = False
+        self._clipboard: ClipboardData | None = None
         self._algorithm_state = AlgorithmState.IDLE
         self._current_interval_ms = BASE_INTERVAL_MS // DEFAULT_SPEED
         self._current_path: Path | None = None
         self._dark = dark
+        self._snap_to_grid = settings.snap_to_grid()
         self._editing_enabled = True
 
         self._history = EditHistory(snapshot(repository.get(), self._positions))
@@ -154,6 +160,7 @@ class MainWindow(QMainWindow):
         self._canvas = GraphCanvas(
             self,
             on_click=self._handle_canvas_click,
+            on_selection_complete=self._handle_selection_complete,
             on_drag_move=self._handle_canvas_drag_move,
             on_drag_end=self._handle_canvas_drag_end,
             dark=dark,
@@ -168,6 +175,10 @@ class MainWindow(QMainWindow):
         self._view_menu: QMenu | None = None
         self._undo_action: QAction | None = None
         self._redo_action: QAction | None = None
+        self._copy_action: QAction | None = None
+        self._paste_action: QAction | None = None
+        self._delete_action: QAction | None = None
+        self._snap_action: QAction | None = None
         self._build_menu()
         self._build_toolbar()
         self._build_status_bar()
@@ -178,7 +189,7 @@ class MainWindow(QMainWindow):
         self._sync_available_nodes()
         self._update_graph_stats()
         self._update_step_availability()
-        self._refresh_undo_redo_actions()
+        self._refresh_action_states()
 
     @property
     def mode(self) -> InteractionMode:
@@ -192,17 +203,18 @@ class MainWindow(QMainWindow):
     def set_mode(self, mode: InteractionMode) -> None:
         """Switch the interaction mode.
 
-        Clears any pending edge source and any active drag so that
-        the next mouse event starts from a clean state.
-
         Args:
             mode: The mode to activate.
         """
         self._mode = mode
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_click = None
         self._drag_changed = False
+        if mode is not InteractionMode.SELECT:
+            self._selected_nodes.clear()
         self._restore_mode_message()
+        self._refresh_canvas()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Confirm unsaved changes before closing the window.
@@ -216,7 +228,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _build_menu(self) -> None:
-        """Create the menu bar with File, Edit, View, and Help menus."""
+        """Create the menu bar."""
         file_menu = self.menuBar().addMenu("&File")
 
         new_action = QAction("&New", self)
@@ -259,6 +271,32 @@ class MainWindow(QMainWindow):
         self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self._redo_action.triggered.connect(self._handle_redo)
         edit_menu.addAction(self._redo_action)
+
+        edit_menu.addSeparator()
+
+        self._copy_action = QAction("&Copy", self)
+        self._copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        self._copy_action.triggered.connect(self._handle_copy)
+        edit_menu.addAction(self._copy_action)
+
+        self._paste_action = QAction("&Paste", self)
+        self._paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        self._paste_action.triggered.connect(self._handle_paste)
+        edit_menu.addAction(self._paste_action)
+
+        edit_menu.addSeparator()
+
+        self._delete_action = QAction("&Delete Selected", self)
+        self._delete_action.setShortcut(QKeySequence.StandardKey.Delete)
+        self._delete_action.triggered.connect(self._handle_delete_selected)
+        edit_menu.addAction(self._delete_action)
+
+        edit_menu.addSeparator()
+
+        select_all_action = QAction("Select &All", self)
+        select_all_action.setShortcut(QKeySequence.StandardKey.SelectAll)
+        select_all_action.triggered.connect(self._handle_select_all)
+        edit_menu.addAction(select_all_action)
 
         self._view_menu = self.menuBar().addMenu("&View")
 
@@ -335,10 +373,19 @@ class MainWindow(QMainWindow):
             self._view_menu.addAction(self._matrix_dock.toggleViewAction())
 
     def _add_theme_action(self) -> None:
-        """Add the theme toggle to the View menu."""
+        """Add theme and snap-to-grid toggles to the View menu."""
         if self._view_menu is None:
             return
         self._view_menu.addSeparator()
+
+        self._snap_action = QAction("Snap to grid", self)
+        self._snap_action.setCheckable(True)
+        self._snap_action.setChecked(self._snap_to_grid)
+        self._snap_action.triggered.connect(self._handle_toggle_snap)
+        self._view_menu.addAction(self._snap_action)
+
+        self._view_menu.addSeparator()
+
         self._dark_theme_action = QAction("Dark theme", self)
         self._dark_theme_action.setCheckable(True)
         self._dark_theme_action.setChecked(self._dark)
@@ -346,10 +393,10 @@ class MainWindow(QMainWindow):
         self._view_menu.addAction(self._dark_theme_action)
 
     def _handle_toggle_theme(self, checked: bool) -> None:
-        """Switch between dark and light themes and persist the choice.
+        """Switch themes and persist the choice.
 
         Args:
-            checked: True for the dark theme, False for the light one.
+            checked: True for dark, False for light.
         """
         self._dark = checked
         app = QApplication.instance()
@@ -358,6 +405,15 @@ class MainWindow(QMainWindow):
         self._canvas.set_dark(checked)
         self._settings.set_dark_theme(checked)
         self._refresh_canvas()
+
+    def _handle_toggle_snap(self, checked: bool) -> None:
+        """Enable or disable snap-to-grid.
+
+        Args:
+            checked: True to enable snapping.
+        """
+        self._snap_to_grid = checked
+        self._settings.set_snap_to_grid(checked)
 
     def _restore_mode_message(self) -> None:
         """Show the current mode in the status bar."""
@@ -373,7 +429,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(MESSAGE_TIMEOUT_MS, self._restore_mode_message)
 
     def _set_editing_enabled(self, enabled: bool) -> None:
-        """Enable or disable editing, undo, and redo.
+        """Enable or disable editing, undo, redo, and paste.
 
         Args:
             enabled: True to allow editing, False to forbid it.
@@ -381,14 +437,30 @@ class MainWindow(QMainWindow):
         self._editing_enabled = enabled
         for action in self._mode_actions:
             action.setEnabled(enabled)
-        self._refresh_undo_redo_actions()
+        self._refresh_action_states()
 
-    def _refresh_undo_redo_actions(self) -> None:
-        """Update the enabled state of the Undo and Redo actions."""
-        if self._undo_action is None or self._redo_action is None:
-            return
-        self._undo_action.setEnabled(self._editing_enabled and self._history.can_undo())
-        self._redo_action.setEnabled(self._editing_enabled and self._history.can_redo())
+    def _refresh_action_states(self) -> None:
+        """Update the enabled state of the Edit menu actions."""
+        if self._undo_action is not None:
+            self._undo_action.setEnabled(
+                self._editing_enabled and self._history.can_undo()
+            )
+        if self._redo_action is not None:
+            self._redo_action.setEnabled(
+                self._editing_enabled and self._history.can_redo()
+            )
+        if self._copy_action is not None:
+            self._copy_action.setEnabled(
+                self._editing_enabled and bool(self._selected_nodes)
+            )
+        if self._paste_action is not None:
+            self._paste_action.setEnabled(
+                self._editing_enabled and self._clipboard is not None
+            )
+        if self._delete_action is not None:
+            self._delete_action.setEnabled(
+                self._editing_enabled and bool(self._selected_nodes)
+            )
 
     def _sync_available_nodes(self) -> None:
         """Update the panel's node lists from the current graph."""
@@ -422,7 +494,7 @@ class MainWindow(QMainWindow):
         """Snapshot the current state and push it to the edit history."""
         state = snapshot(self._repository.get(), self._positions)
         self._history.push(state)
-        self._refresh_undo_redo_actions()
+        self._refresh_action_states()
         self._update_window_title()
 
     def _restore(self, state: GraphState) -> None:
@@ -431,45 +503,118 @@ class MainWindow(QMainWindow):
         Args:
             state: The snapshot to restore.
         """
-        import copy as _copy
-
-        self._repository.save(_copy.deepcopy(state.graph))
+        self._repository.save(copy.deepcopy(state.graph))
         self._positions = dict(state.positions)
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
         self._drag_changed = False
         self._sync_available_nodes()
         self._update_graph_stats()
         self._refresh_canvas()
-        self._refresh_undo_redo_actions()
+        self._refresh_action_states()
         self._update_window_title()
 
     def _handle_undo(self) -> None:
         """Undo the last committed change."""
-        if not self._editing_enabled:
+        if not self._editing_enabled or not self._history.can_undo():
             return
-        if not self._history.can_undo():
-            return
-        state = self._history.undo()
-        self._restore(state)
+        self._restore(self._history.undo())
         self._show_temporary_message("Undo")
 
     def _handle_redo(self) -> None:
         """Redo the last undone change."""
-        if not self._editing_enabled:
+        if not self._editing_enabled or not self._history.can_redo():
             return
-        if not self._history.can_redo():
-            return
-        state = self._history.redo()
-        self._restore(state)
+        self._restore(self._history.redo())
         self._show_temporary_message("Redo")
+
+    def _handle_copy(self) -> None:
+        """Copy the selected nodes and their internal edges."""
+        if not self._selected_nodes:
+            return
+        graph = self._repository.get()
+        nodes = [graph.node(nid) for nid in self._selected_nodes if graph.has_node(nid)]
+        node_ids = {node.id for node in nodes}
+        edges = [
+            edge
+            for edge in graph.edges()
+            if edge.source in node_ids and edge.target in node_ids
+        ]
+        self._clipboard = (nodes, edges)
+        self._refresh_action_states()
+        self._show_temporary_message(
+            f"Copied {len(nodes)} node(s), {len(edges)} edge(s)"
+        )
+
+    def _handle_paste(self) -> None:
+        """Paste the clipboard contents with new ids and shifted positions."""
+        if self._clipboard is None:
+            return
+        nodes, edges = self._clipboard
+        if not nodes:
+            return
+        graph = self._repository.get()
+        id_map: dict[int, int] = {}
+        new_ids: list[int] = []
+        for node in nodes:
+            new_id = graph.next_id()
+            self._add_node_use_case.execute(node_id=new_id, label=node.label)
+            old_pos = self._positions.get(node.id, Position(0.5, 0.5))
+            new_x = old_pos.x + PASTE_OFFSET
+            new_y = old_pos.y + PASTE_OFFSET
+            if self._snap_to_grid:
+                new_x = _snap(new_x)
+                new_y = _snap(new_y)
+            self._positions[new_id] = Position(x=new_x, y=new_y)
+            id_map[node.id] = new_id
+            new_ids.append(new_id)
+        for edge in edges:
+            self._add_edge_use_case.execute(
+                source=id_map[edge.source],
+                target=id_map[edge.target],
+                weight=edge.weight,
+                directed=edge.directed,
+            )
+        self._selected_nodes = set(new_ids)
+        self._commit()
+        self._sync_available_nodes()
+        self._update_graph_stats()
+        self._refresh_canvas()
+        self._show_temporary_message(f"Pasted {len(new_ids)} node(s)")
+
+    def _handle_select_all(self) -> None:
+        """Select every node in the graph."""
+        if self._mode is not InteractionMode.SELECT:
+            self.set_mode(InteractionMode.SELECT)
+        self._selected_nodes = {node.id for node in self._repository.get().nodes()}
+        self._refresh_action_states()
+        self._refresh_canvas()
+
+    def _handle_delete_selected(self) -> None:
+        """Delete every selected node and its incident edges."""
+        if not self._selected_nodes:
+            return
+        graph = self._repository.get()
+        count = 0
+        for nid in list(self._selected_nodes):
+            if graph.has_node(nid):
+                self._remove_node_use_case.execute(node_id=nid)
+                self._positions.pop(nid, None)
+                count += 1
+        self._selected_nodes.clear()
+        self._commit()
+        self._sync_available_nodes()
+        self._update_graph_stats()
+        self._refresh_canvas()
+        self._show_temporary_message(f"Deleted {count} node(s)")
 
     def _confirm_discard_changes(self) -> bool:
         """Ask the user what to do with unsaved changes.
 
         Returns:
-            True if it is safe to proceed, False if the user
-            cancelled.
+            True if it is safe to proceed, False if cancelled.
         """
         if not self._history.is_dirty():
             return True
@@ -517,13 +662,16 @@ class MainWindow(QMainWindow):
         self._current_path = None
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
+        self._clipboard = None
         self._drag_changed = False
         self._reset_algorithm()
         self._history.reset(snapshot(self._repository.get(), self._positions))
         self._sync_available_nodes()
         self._refresh_canvas()
         self._update_graph_stats()
-        self._refresh_undo_redo_actions()
+        self._refresh_action_states()
         self._update_window_title()
         self._show_temporary_message("New project")
 
@@ -547,13 +695,16 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
+        self._clipboard = None
         self._drag_changed = False
         self._reset_algorithm()
         self._history.reset(snapshot(self._repository.get(), self._positions))
         self._sync_available_nodes()
         self._refresh_canvas()
         self._update_graph_stats()
-        self._refresh_undo_redo_actions()
+        self._refresh_action_states()
         self._update_window_title()
         self._show_temporary_message(f"Opened {path.name}")
 
@@ -588,48 +739,151 @@ class MainWindow(QMainWindow):
         self._show_temporary_message(f"Saved to {path.name}")
         return True
 
-    def _handle_canvas_click(
-        self,
-        x: float,
-        y: float,
-        node_id: int | None,
-        edge: tuple[int, int] | None,
-    ) -> None:
-        """Dispatch a canvas click according to the active mode."""
+    def _handle_canvas_click(self, event: ClickEvent) -> None:
+        """Dispatch a canvas click according to the active mode.
+
+        Args:
+            event: The click event.
+        """
         if self._algorithm_state is not AlgorithmState.IDLE:
             return
         if self._mode is InteractionMode.SELECT:
-            if node_id is not None:
-                self._drag_node = node_id
-                self._drag_changed = False
-            elif edge is not None:
-                self._handle_edit_edge(edge)
+            self._handle_select_click(event)
         elif self._mode is InteractionMode.ADD_NODE:
-            self._handle_add_node(x, y)
+            self._handle_add_node(event.x, event.y)
         elif self._mode is InteractionMode.ADD_EDGE:
-            self._handle_add_edge(node_id)
+            self._handle_add_edge(event.node_id)
         elif self._mode is InteractionMode.DELETE:
-            self._handle_delete(node_id, edge)
+            self._handle_delete(event.node_id, event.edge)
 
-    def _handle_canvas_drag_move(self, x: float, y: float) -> None:
-        """Move the node currently being dragged, if any."""
+    def _handle_select_click(self, event: ClickEvent) -> None:
+        """Handle a click in SELECT mode.
+
+        Args:
+            event: The click event.
+        """
+        if event.node_id is not None:
+            if event.double:
+                self._handle_edit_node(event.node_id)
+                return
+            if event.shift:
+                if event.node_id in self._selected_nodes:
+                    self._selected_nodes.discard(event.node_id)
+                else:
+                    self._selected_nodes.add(event.node_id)
+                self._refresh_action_states()
+                self._refresh_canvas()
+                return
+            if event.node_id not in self._selected_nodes:
+                self._selected_nodes = {event.node_id}
+                self._refresh_action_states()
+                self._refresh_canvas()
+            self._start_drag(event)
+            return
+
+        if event.edge is not None and not event.shift:
+            self._handle_edit_edge(event.edge)
+            return
+
+        if not event.shift and self._selected_nodes:
+            self._selected_nodes.clear()
+            self._refresh_action_states()
+            self._refresh_canvas()
+
+    def _start_drag(self, event: ClickEvent) -> None:
+        """Begin dragging the currently selected nodes.
+
+        Args:
+            event: The click that started the drag.
+        """
+        if event.node_id is None:
+            return
+        self._drag_node = event.node_id
+        self._drag_click = (event.x, event.y)
+        self._drag_initial_positions = {
+            nid: self._positions[nid]
+            for nid in self._selected_nodes
+            if nid in self._positions
+        }
+        self._drag_changed = False
+
+    def _handle_selection_complete(self, event: SelectionEvent) -> None:
+        """Handle a completed rubber-band selection.
+
+        Args:
+            event: The selection event.
+        """
+        if self._algorithm_state is not AlgorithmState.IDLE:
+            return
         if self._mode is not InteractionMode.SELECT:
             return
-        if self._drag_node is None:
+        chosen: set[int] = set()
+        for node in self._repository.get().nodes():
+            position = self._positions.get(node.id)
+            if position is None:
+                continue
+            if (
+                event.x1 <= position.x <= event.x2
+                and event.y1 <= position.y <= event.y2
+            ):
+                chosen.add(node.id)
+        if event.additive:
+            self._selected_nodes |= chosen
+        else:
+            self._selected_nodes = chosen
+        self._refresh_action_states()
+        self._refresh_canvas()
+        if chosen:
+            self._show_temporary_message(f"Selected {len(chosen)} node(s)")
+
+    def _handle_canvas_drag_move(self, x: float, y: float) -> None:
+        """Move the currently dragged node and its selected peers.
+
+        Args:
+            x: Horizontal coordinate of the cursor.
+            y: Vertical coordinate of the cursor.
+        """
+        if self._mode is not InteractionMode.SELECT:
             return
-        self._positions[self._drag_node] = Position(x=x, y=y)
+        if self._drag_node is None or self._drag_click is None:
+            return
+        anchor = self._drag_initial_positions.get(self._drag_node)
+        if anchor is None:
+            return
+        new_x = anchor.x + (x - self._drag_click[0])
+        new_y = anchor.y + (y - self._drag_click[1])
+        if self._snap_to_grid:
+            new_x = _snap(new_x)
+            new_y = _snap(new_y)
+        delta_x = new_x - anchor.x
+        delta_y = new_y - anchor.y
+        for nid, original in self._drag_initial_positions.items():
+            self._positions[nid] = Position(
+                x=original.x + delta_x,
+                y=original.y + delta_y,
+            )
         self._drag_changed = True
         self._refresh_canvas()
 
     def _handle_canvas_drag_end(self) -> None:
         """Finish any active drag."""
         self._drag_node = None
+        self._drag_click = None
+        self._drag_initial_positions = {}
         if self._drag_changed:
             self._drag_changed = False
             self._commit()
 
     def _handle_add_node(self, x: float, y: float) -> None:
-        """Add a node at the clicked position."""
+        """Add a node at the clicked position.
+
+        Args:
+            x: Horizontal coordinate of the click.
+            y: Vertical coordinate of the click.
+        """
+        if self._snap_to_grid:
+            x = _snap(x)
+            y = _snap(y)
         graph = self._repository.get()
         new_id = graph.next_id()
         node = self._add_node_use_case.execute(node_id=new_id)
@@ -640,8 +894,34 @@ class MainWindow(QMainWindow):
         self._refresh_canvas()
         self._show_temporary_message(f"Added node {node.id}")
 
+    def _handle_edit_node(self, node_id: int) -> None:
+        """Open a dialog to edit the node's label.
+
+        Args:
+            node_id: Id of the node to edit.
+        """
+        graph = self._repository.get()
+        if not graph.has_node(node_id):
+            return
+        current = graph.node(node_id)
+        new_label = NodeAttributesDialog.get_label(
+            initial_label=current.label,
+            node_id=node_id,
+            parent=self,
+        )
+        if new_label is None:
+            return
+        self._update_node_use_case.execute(node_id=node_id, label=new_label)
+        self._commit()
+        self._refresh_canvas()
+        self._show_temporary_message(f"Node {node_id} label updated")
+
     def _handle_add_edge(self, node_id: int | None) -> None:
-        """Add an edge between two consecutively clicked nodes."""
+        """Add an edge between two consecutively clicked nodes.
+
+        Args:
+            node_id: Id of the node under the cursor, or None.
+        """
         if node_id is None:
             self._pending_edge_source = None
             self._show_temporary_message("Add edge: cancelled")
@@ -681,7 +961,11 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_edit_edge(self, edge: tuple[int, int]) -> None:
-        """Open a dialog to change the attributes of an existing edge."""
+        """Open a dialog to change the attributes of an existing edge.
+
+        Args:
+            edge: Endpoints of the edge to edit.
+        """
         source, target = edge
         current = self._find_edge(source, target)
         if current is None:
@@ -719,7 +1003,12 @@ class MainWindow(QMainWindow):
         node_id: int | None,
         edge: tuple[int, int] | None,
     ) -> None:
-        """Remove the node or edge under the cursor."""
+        """Remove the node or edge under the cursor.
+
+        Args:
+            node_id: Id of the node under the cursor, or None.
+            edge: Endpoints of the edge under the cursor, or None.
+        """
         if node_id is not None:
             self._handle_delete_node(node_id)
             return
@@ -729,9 +1018,14 @@ class MainWindow(QMainWindow):
         self._show_temporary_message("Delete: nothing under cursor")
 
     def _handle_delete_node(self, node_id: int) -> None:
-        """Remove a node and all edges incident to it."""
+        """Remove a node and all edges incident to it.
+
+        Args:
+            node_id: Id of the node to remove.
+        """
         self._remove_node_use_case.execute(node_id=node_id)
         self._positions.pop(node_id, None)
+        self._selected_nodes.discard(node_id)
         if self._pending_edge_source == node_id:
             self._pending_edge_source = None
         self._commit()
@@ -741,7 +1035,11 @@ class MainWindow(QMainWindow):
         self._show_temporary_message(f"Deleted node {node_id}")
 
     def _handle_delete_edge(self, edge: tuple[int, int]) -> None:
-        """Remove the edge between two nodes."""
+        """Remove the edge between two nodes.
+
+        Args:
+            edge: Endpoints of the edge to remove.
+        """
         source, target = edge
         self._remove_edge_use_case.execute(source=source, target=target)
         self._commit()
@@ -755,7 +1053,13 @@ class MainWindow(QMainWindow):
         start_node_id: int,
         target_node_id: object,
     ) -> None:
-        """Start or resume an algorithm run."""
+        """Start or resume an algorithm run.
+
+        Args:
+            algorithm_id: Identifier of the algorithm.
+            start_node_id: Id of the start node.
+            target_node_id: Id of the target node, or None.
+        """
         if self._algorithm_state in (
             AlgorithmState.PAUSED,
             AlgorithmState.FINISHED,
@@ -780,6 +1084,8 @@ class MainWindow(QMainWindow):
         self._mode = InteractionMode.SELECT
         self._pending_edge_source = None
         self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
         self._drag_changed = False
         self._set_editing_enabled(False)
         self._algorithm_state = AlgorithmState.RUNNING
@@ -829,12 +1135,20 @@ class MainWindow(QMainWindow):
         self._refresh_canvas()
 
     def _on_speed_changed(self, interval_ms: int) -> None:
-        """Update the animation speed."""
+        """Update the animation speed.
+
+        Args:
+            interval_ms: New delay between steps in milliseconds.
+        """
         self._current_interval_ms = interval_ms
         self._animator.set_interval(interval_ms)
 
     def _on_step_ready(self, result: object) -> None:
-        """Render the latest algorithm step."""
+        """Render the latest algorithm step.
+
+        Args:
+            result: A StepResult emitted by the animator.
+        """
         if not isinstance(result, StepResult):
             return
         self._panel.set_info(result.info)
@@ -853,7 +1167,11 @@ class MainWindow(QMainWindow):
         self._update_step_availability()
 
     def _update_matrix_view(self, result: StepResult) -> None:
-        """Update the matrix dock if the step provides matrix data."""
+        """Update the matrix dock if the step provides matrix data.
+
+        Args:
+            result: The StepResult of the current step.
+        """
         if not result.matrix:
             return
         node_ids = [node.id for node in self._repository.get().nodes()]
@@ -874,4 +1192,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_canvas(self) -> None:
         """Redraw the canvas from the current graph and positions."""
-        self._canvas.draw_graph(self._repository.get(), self._positions)
+        self._canvas.draw_graph(
+            graph=self._repository.get(),
+            positions=self._positions,
+            selected_nodes=frozenset(self._selected_nodes),
+        )

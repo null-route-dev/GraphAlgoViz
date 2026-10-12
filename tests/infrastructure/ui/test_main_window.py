@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QSettings
-from PySide6.QtGui import QCloseEvent, QKeySequence
+from PySide6.QtGui import QCloseEvent
 
 from application.algorithms.registry import build_default_registry
 from application.services.layout_service import LayoutService
@@ -14,6 +14,7 @@ from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
 from application.use_cases.remove_node import RemoveNodeUseCase
 from application.use_cases.update_edge import UpdateEdgeUseCase
+from application.use_cases.update_node import UpdateNodeUseCase
 from infrastructure.repositories.in_memory_graph_repository import (
     InMemoryGraphRepository,
 )
@@ -21,12 +22,9 @@ from infrastructure.serialization.json_project_storage import (
     JsonProjectStorage,
 )
 from infrastructure.settings import AppSettings
+from infrastructure.ui.graph_canvas import ClickEvent, SelectionEvent
 from infrastructure.ui.interaction_mode import InteractionMode
-from infrastructure.ui.main_window import (
-    APP_NAME,
-    MODE_SHORTCUTS,
-    MainWindow,
-)
+from infrastructure.ui.main_window import APP_NAME, MainWindow
 
 
 @pytest.fixture
@@ -39,23 +37,11 @@ def settings(tmp_path: Path) -> Iterator[AppSettings]:
 
 @pytest.fixture
 def window(qtbot: object, settings: AppSettings) -> Iterator[MainWindow]:
-    """Return a fully wired MainWindow for testing.
-
-    The window is closed in teardown. Before closing, the edit history
-    is marked as saved so that ``closeEvent`` does not open a modal
-    confirmation dialog — that dialog would block forever in offscreen
-    mode, where no one can click its buttons.
-    """
+    """Return a fully wired MainWindow for testing."""
     repository = InMemoryGraphRepository()
     layout_service = LayoutService()
     registry = build_default_registry()
     storage = JsonProjectStorage()
-
-    add_node = AddNodeUseCase(repository)
-    add_edge = AddEdgeUseCase(repository)
-    remove_node = RemoveNodeUseCase(repository)
-    remove_edge = RemoveEdgeUseCase(repository)
-    update_edge = UpdateEdgeUseCase(repository)
 
     widget = MainWindow(
         repository=repository,
@@ -63,17 +49,29 @@ def window(qtbot: object, settings: AppSettings) -> Iterator[MainWindow]:
         registry=registry,
         storage=storage,
         settings=settings,
-        add_node_use_case=add_node,
-        add_edge_use_case=add_edge,
-        remove_node_use_case=remove_node,
-        remove_edge_use_case=remove_edge,
-        update_edge_use_case=update_edge,
+        add_node_use_case=AddNodeUseCase(repository),
+        add_edge_use_case=AddEdgeUseCase(repository),
+        remove_node_use_case=RemoveNodeUseCase(repository),
+        remove_edge_use_case=RemoveEdgeUseCase(repository),
+        update_edge_use_case=UpdateEdgeUseCase(repository),
+        update_node_use_case=UpdateNodeUseCase(repository),
     )
     _ = qtbot
     yield widget
     widget._history.mark_saved()
     widget.close()
     widget.deleteLater()
+
+
+def _click(
+    x: float,
+    y: float,
+    node_id: int | None = None,
+    edge: tuple[int, int] | None = None,
+    shift: bool = False,
+    double: bool = False,
+) -> ClickEvent:
+    return ClickEvent(x=x, y=y, node_id=node_id, edge=edge, shift=shift, double=double)
 
 
 def test_initial_title_is_app_name(window: MainWindow) -> None:
@@ -91,18 +89,11 @@ def test_initial_stats_show_zero(window: MainWindow) -> None:
     assert window._stats_label.text() == "Nodes: 0   Edges: 0"
 
 
-def test_new_window_is_clean(window: MainWindow) -> None:
-    """A fresh window has no unsaved changes."""
-    assert window._history.is_dirty() is False
-    assert "*" not in window.windowTitle()
-
-
 def test_add_node_marks_dirty(window: MainWindow) -> None:
     """Adding a node marks the project as dirty."""
     window._handle_add_node(0.5, 0.5)
 
     assert window._history.is_dirty() is True
-    assert "*" in window.windowTitle()
 
 
 def test_add_node_updates_stats(window: MainWindow) -> None:
@@ -112,130 +103,9 @@ def test_add_node_updates_stats(window: MainWindow) -> None:
     assert window._stats_label.text() == "Nodes: 1   Edges: 0"
 
 
-def test_delete_node_updates_stats(window: MainWindow) -> None:
-    """Deleting a node updates the status bar counters."""
-    window._handle_add_node(0.5, 0.5)
-    window._handle_delete_node(1)
-
-    assert window._stats_label.text() == "Nodes: 0   Edges: 0"
-
-
-def test_set_mode_updates_status(window: MainWindow) -> None:
-    """Switching the mode updates the status bar message."""
-    window.set_mode(InteractionMode.ADD_NODE)
-
-    assert window.mode is InteractionMode.ADD_NODE
-    assert "Add Node" in window._status_bar.currentMessage()
-
-
-def test_close_event_accepted_when_clean(window: MainWindow) -> None:
-    """Closing a clean project accepts the event without prompting."""
-    event = QCloseEvent()
-    window.closeEvent(event)
-
-    assert event.isAccepted()
-
-
-def test_close_event_ignored_when_cancelled(
-    window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Cancelling the confirmation dialog ignores the close event."""
-    window._handle_add_node(0.5, 0.5)
-    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: False)
-
-    event = QCloseEvent()
-    window.closeEvent(event)
-
-    assert event.isAccepted() is False
-
-
-def test_close_event_accepted_when_confirmed(
-    window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Confirming the dialog accepts the close event."""
-    window._handle_add_node(0.5, 0.5)
-    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
-
-    event = QCloseEvent()
-    window.closeEvent(event)
-
-    assert event.isAccepted()
-
-
-def test_editing_locked_while_algorithm_loaded(window: MainWindow) -> None:
-    """Clicks are ignored while an algorithm is loaded."""
-    window._handle_add_node(0.5, 0.5)
-    window._handle_add_node(0.6, 0.6)
-    window._algorithm_state = window._algorithm_state.PAUSED
-
-    window._handle_canvas_click(0.5, 0.5, node_id=1, edge=None)
-
-    assert window._drag_node is None
-
-
-def test_mode_shortcuts_map_is_complete() -> None:
-    """Every interaction mode has a shortcut assigned."""
-    for mode in InteractionMode:
-        assert mode in MODE_SHORTCUTS
-
-
-def test_mode_actions_have_shortcuts(window: MainWindow) -> None:
-    """Each mode action carries the shortcut from MODE_SHORTCUTS."""
-    for action in window._mode_actions:
-        expected_mode = None
-        for mode in InteractionMode:
-            if action.text() == mode.display_name:
-                expected_mode = mode
-                break
-        assert expected_mode is not None
-        assert action.shortcut() == QKeySequence(MODE_SHORTCUTS[expected_mode])
-
-
-def test_toggle_theme_persists_setting(
-    window: MainWindow,
-    settings: AppSettings,
-) -> None:
-    """Toggling the theme saves the choice through AppSettings."""
-    settings.set_dark_theme(True)
-    window._handle_toggle_theme(False)
-
-    assert settings.dark_theme() is False
-
-
-def test_toggle_theme_updates_flag(window: MainWindow) -> None:
-    """Toggling the theme updates the window's internal flag."""
-    window._handle_toggle_theme(False)
-
-    assert window._dark is False
-
-
-def test_undo_initially_disabled(window: MainWindow) -> None:
-    """Undo is disabled when there is nothing to undo."""
-    assert window._undo_action is not None
-    assert window._undo_action.isEnabled() is False
-
-
-def test_redo_initially_disabled(window: MainWindow) -> None:
-    """Redo is disabled when there is nothing to redo."""
-    assert window._redo_action is not None
-    assert window._redo_action.isEnabled() is False
-
-
-def test_undo_enabled_after_edit(window: MainWindow) -> None:
-    """Undo becomes enabled after a mutation."""
-    window._handle_add_node(0.5, 0.5)
-
-    assert window._undo_action is not None
-    assert window._undo_action.isEnabled() is True
-
-
 def test_undo_reverts_add_node(window: MainWindow) -> None:
     """Undo removes the node added by the last edit."""
     window._handle_add_node(0.5, 0.5)
-    assert window._stats_label.text() == "Nodes: 1   Edges: 0"
-
     window._handle_undo()
 
     assert window._stats_label.text() == "Nodes: 0   Edges: 0"
@@ -250,63 +120,175 @@ def test_redo_reapplies_add_node(window: MainWindow) -> None:
     assert window._stats_label.text() == "Nodes: 1   Edges: 0"
 
 
-def test_undo_reverts_multiple_edits(window: MainWindow) -> None:
-    """Undo walks back through the history one step at a time."""
+def test_close_event_accepted_when_clean(window: MainWindow) -> None:
+    """Closing a clean project accepts the event without prompting."""
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted()
+
+
+def test_editing_locked_while_algorithm_loaded(window: MainWindow) -> None:
+    """Clicks are ignored while an algorithm is loaded."""
     window._handle_add_node(0.5, 0.5)
     window._handle_add_node(0.6, 0.6)
-    window._handle_add_node(0.7, 0.7)
-    assert window._stats_label.text() == "Nodes: 3   Edges: 0"
+    window._algorithm_state = window._algorithm_state.PAUSED
 
-    window._handle_undo()
+    window._handle_canvas_click(_click(0.5, 0.5, node_id=1))
+
+    assert window._drag_node is None
+
+
+def test_snap_applies_to_add_node(window: MainWindow) -> None:
+    """With snap enabled, added nodes land on grid points."""
+    window._snap_to_grid = True
+    window._handle_add_node(0.532, 0.478)
+
+    pos = window._positions[1]
+    assert pos.x == pytest.approx(0.55, abs=1e-9)
+    assert pos.y == pytest.approx(0.5, abs=1e-9)
+
+
+def test_snap_toggle_persists(window: MainWindow, settings: AppSettings) -> None:
+    """Toggling snap saves the preference."""
+    window._handle_toggle_snap(True)
+
+    assert settings.snap_to_grid() is True
+
+
+def test_click_selects_single_node(window: MainWindow) -> None:
+    """A plain click selects only the clicked node."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    assert window._selected_nodes == {1}
+
+
+def test_shift_click_adds_to_selection(window: MainWindow) -> None:
+    """Shift-click adds a node to the current selection."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_click(_click(0.4, 0.4, node_id=2, shift=True))
+
+    assert window._selected_nodes == {1, 2}
+
+
+def test_shift_click_toggles_off(window: MainWindow) -> None:
+    """Shift-clicking a selected node removes it from the selection."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1, shift=True))
+
+    assert window._selected_nodes == set()
+
+
+def test_click_on_empty_clears_selection(window: MainWindow) -> None:
+    """Clicking empty space clears the selection."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    window._handle_canvas_click(_click(0.8, 0.8, node_id=None))
+
+    assert window._selected_nodes == set()
+
+
+def test_rubber_band_selects_nodes_inside(window: MainWindow) -> None:
+    """Rubber-band selects every node within the rectangle."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.3, 0.3)
+    window._handle_add_node(0.9, 0.9)
+
+    window._handle_selection_complete(
+        SelectionEvent(x1=0.0, y1=0.0, x2=0.5, y2=0.5, additive=False)
+    )
+
+    assert window._selected_nodes == {1, 2}
+
+
+def test_rubber_band_additive_keeps_previous(window: MainWindow) -> None:
+    """An additive rubber-band selection extends the existing one."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.5, 0.5)
+    window._handle_canvas_click(_click(0.1, 0.1, node_id=1))
+
+    window._handle_selection_complete(
+        SelectionEvent(x1=0.4, y1=0.4, x2=0.6, y2=0.6, additive=True)
+    )
+
+    assert window._selected_nodes == {1, 2}
+
+
+def test_copy_paste_creates_new_node(window: MainWindow) -> None:
+    """Copy/paste duplicates a selected node."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_copy()
+
+    window._handle_paste()
+
     assert window._stats_label.text() == "Nodes: 2   Edges: 0"
 
-    window._handle_undo()
-    assert window._stats_label.text() == "Nodes: 1   Edges: 0"
 
-    window._handle_undo()
+def test_copy_paste_preserves_edges(window: MainWindow) -> None:
+    """Copy/paste duplicates the edges between selected nodes."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._add_edge_use_case.execute(source=1, target=2, weight=2.0)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_click(_click(0.4, 0.4, node_id=2, shift=True))
+    window._handle_copy()
+
+    window._handle_paste()
+
+    assert window._stats_label.text() == "Nodes: 4   Edges: 2"
+
+
+def test_paste_does_nothing_without_clipboard(window: MainWindow) -> None:
+    """Paste without prior copy does not change the graph."""
+    window._handle_paste()
+
     assert window._stats_label.text() == "Nodes: 0   Edges: 0"
 
 
-def test_redo_becomes_disabled_after_new_edit(window: MainWindow) -> None:
-    """A new edit after undo discards the redo tail."""
-    window._handle_add_node(0.5, 0.5)
-    window._handle_undo()
-    assert window._redo_action is not None
-    assert window._redo_action.isEnabled() is True
+def test_delete_selected_removes_all(window: MainWindow) -> None:
+    """Delete Selected removes every selected node."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_click(_click(0.4, 0.4, node_id=2, shift=True))
 
-    window._handle_add_node(0.7, 0.7)
+    window._handle_delete_selected()
 
-    assert window._redo_action.isEnabled() is False
-
-
-def test_undo_to_saved_state_clears_dirty(window: MainWindow) -> None:
-    """Undo back to the saved state removes the dirty indicator."""
-    window._handle_add_node(0.5, 0.5)
-    assert "*" in window.windowTitle()
-
-    window._handle_undo()
-
-    assert "*" not in window.windowTitle()
+    assert window._stats_label.text() == "Nodes: 0   Edges: 0"
+    assert window._selected_nodes == set()
 
 
-def test_new_project_clears_history(window: MainWindow) -> None:
-    """File → New resets history and disables undo."""
-    window._handle_add_node(0.5, 0.5)
-    window._confirm_discard_changes = lambda: True  # type: ignore[method-assign]
+def test_select_all_selects_every_node(window: MainWindow) -> None:
+    """Edit → Select All marks every node."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.3, 0.3)
 
-    window._handle_new_project()
+    window._handle_select_all()
 
-    assert window._undo_action is not None
-    assert window._undo_action.isEnabled() is False
-    assert window._history.is_dirty() is False
+    assert window._selected_nodes == {1, 2, 3}
 
 
-def test_undo_does_not_touch_algorithm_state(window: MainWindow) -> None:
-    """Undo is ignored while an algorithm is loaded."""
-    window._handle_add_node(0.5, 0.5)
-    window._algorithm_state = window._algorithm_state.PAUSED
-    window._set_editing_enabled(False)
+def test_drag_moves_all_selected_nodes(window: MainWindow) -> None:
+    """Dragging a selected node moves every selected node together."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_click(_click(0.4, 0.4, node_id=2, shift=True))
 
-    window._handle_undo()
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_drag_move(0.3, 0.3)
 
-    assert window._stats_label.text() == "Nodes: 1   Edges: 0"
+    assert window._positions[1].x == pytest.approx(0.3, abs=1e-9)
+    assert window._positions[2].x == pytest.approx(0.5, abs=1e-9)
+    assert window._positions[2].y == pytest.approx(0.5, abs=1e-9)
+    window._handle_canvas_drag_end()

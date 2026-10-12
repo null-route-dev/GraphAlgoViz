@@ -11,6 +11,7 @@ from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
 from application.use_cases.remove_node import RemoveNodeUseCase
 from application.use_cases.update_edge import UpdateEdgeUseCase
+from application.use_cases.update_node import UpdateNodeUseCase
 from infrastructure.repositories.in_memory_graph_repository import (
     InMemoryGraphRepository,
 )
@@ -37,6 +38,7 @@ def main() -> None:
     remove_node_use_case = RemoveNodeUseCase(repository)
     remove_edge_use_case = RemoveEdgeUseCase(repository)
     update_edge_use_case = UpdateEdgeUseCase(repository)
+    update_node_use_case = UpdateNodeUseCase(repository)
 
     app = QApplication(sys.argv)
     apply_theme(app, dark)
@@ -51,6 +53,7 @@ def main() -> None:
         remove_node_use_case=remove_node_use_case,
         remove_edge_use_case=remove_edge_use_case,
         update_edge_use_case=update_edge_use_case,
+        update_node_use_case=update_node_use_case,
         dark=dark,
     )
     window.show()
