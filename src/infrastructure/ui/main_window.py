@@ -56,6 +56,17 @@ BASE_INTERVAL_MS = 1000
 PROJECT_FILTER = "GraphAlgoViz project (*.gaviz);;All files (*)"
 PROJECT_SUFFIX = ".gaviz"
 
+EXPORT_FILTER = (
+    "PNG image (*.png);;"
+    "SVG image (*.svg);;"
+    "PDF document (*.pdf);;"
+    "JPEG image (*.jpg *.jpeg);;"
+    "All files (*)"
+)
+EXPORT_EXTENSIONS = (".png", ".svg", ".pdf", ".jpg", ".jpeg")
+DEFAULT_EXPORT_SUFFIX = ".png"
+EXPORT_DPI = 200
+
 UNSAVED_TITLE = "Unsaved changes"
 UNSAVED_TEXT = "The project has unsaved changes. Save them before continuing?"
 
@@ -94,6 +105,24 @@ def _snap(value: float) -> float:
         The nearest multiple of GRID_SIZE.
     """
     return round(value / GRID_SIZE) * GRID_SIZE
+
+
+def _resolve_export_path(path: Path) -> Path:
+    """Return the export path with a supported image extension.
+
+    If the path already has a supported extension, it is returned
+    unchanged. Otherwise the suffix is replaced with the default PNG
+    extension.
+
+    Args:
+        path: The path chosen by the user.
+
+    Returns:
+        A path with a supported image extension.
+    """
+    if path.suffix.lower() in EXPORT_EXTENSIONS:
+        return path
+    return path.with_suffix(DEFAULT_EXPORT_SUFFIX)
 
 
 ClipboardData = tuple[list[Node], list[Edge]]
@@ -252,6 +281,13 @@ class MainWindow(QMainWindow):
         save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_as_action.triggered.connect(self._handle_save_project_as)
         file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        export_action = QAction("&Export Image...", self)
+        export_action.setShortcut(QKeySequence("Ctrl+E"))
+        export_action.triggered.connect(self._handle_export_image)
+        file_menu.addAction(export_action)
 
         file_menu.addSeparator()
 
@@ -529,6 +565,21 @@ class MainWindow(QMainWindow):
             return
         self._restore(self._history.redo())
         self._show_temporary_message("Redo")
+
+    def _handle_export_image(self) -> None:
+        """Prompt for a destination and save the canvas as an image."""
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Export image", "", EXPORT_FILTER
+        )
+        if not path_str:
+            return
+        path = _resolve_export_path(Path(path_str))
+        try:
+            self._canvas.save_figure(path, dpi=EXPORT_DPI)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self._show_temporary_message(f"Exported to {path.name}")
 
     def _handle_copy(self) -> None:
         """Copy the selected nodes and their internal edges."""

@@ -1,5 +1,8 @@
 """Tests for the graph canvas and its geometry helpers."""
 
+from collections.abc import Iterator
+from pathlib import Path
+
 import pytest
 
 from domain.entities.edge import Edge
@@ -7,6 +10,7 @@ from domain.value_objects.position import Position
 from infrastructure.ui.graph_canvas import (
     ARC_SPACING,
     ClickEvent,
+    GraphCanvas,
     SelectionEvent,
     _arc_midpoint,
     _arc_rad_for_index,
@@ -16,6 +20,15 @@ from infrastructure.ui.graph_canvas import (
     _point_to_segment_distance,
     _shorten_towards,
 )
+
+
+@pytest.fixture
+def canvas(qtbot: object) -> Iterator[GraphCanvas]:
+    """Return a GraphCanvas for export tests."""
+    _ = qtbot
+    widget = GraphCanvas()
+    yield widget
+    widget.deleteLater()
 
 
 def test_lerp_at_zero_returns_start() -> None:
@@ -175,3 +188,67 @@ def test_selection_event_fields() -> None:
     assert event.x2 == 0.3
     assert event.y2 == 0.4
     assert event.additive is True
+
+
+def test_save_figure_png(canvas: GraphCanvas, tmp_path: Path) -> None:
+    """Exporting to PNG creates a non-empty file."""
+    path = tmp_path / "graph.png"
+    canvas.save_figure(path)
+
+    assert path.exists()
+    assert path.stat().st_size > 0
+
+
+def test_save_figure_png_starts_with_png_magic(
+    canvas: GraphCanvas, tmp_path: Path
+) -> None:
+    """The PNG file has the PNG magic bytes at the start."""
+    path = tmp_path / "graph.png"
+    canvas.save_figure(path)
+
+    with path.open("rb") as f:
+        header = f.read(8)
+
+    assert header == b"\x89PNG\r\n\x1a\n"
+
+
+def test_save_figure_svg(canvas: GraphCanvas, tmp_path: Path) -> None:
+    """Exporting to SVG produces an XML document."""
+    path = tmp_path / "graph.svg"
+    canvas.save_figure(path)
+
+    content = path.read_text(encoding="utf-8")
+
+    assert "<svg" in content
+
+
+def test_save_figure_pdf(canvas: GraphCanvas, tmp_path: Path) -> None:
+    """Exporting to PDF produces a PDF document."""
+    path = tmp_path / "graph.pdf"
+    canvas.save_figure(path)
+
+    with path.open("rb") as f:
+        header = f.read(4)
+
+    assert header == b"%PDF"
+
+
+def test_save_figure_custom_dpi(canvas: GraphCanvas, tmp_path: Path) -> None:
+    """A higher DPI produces a larger PNG file."""
+    low_path = tmp_path / "low.png"
+    high_path = tmp_path / "high.png"
+
+    canvas.save_figure(low_path, dpi=50)
+    canvas.save_figure(high_path, dpi=200)
+
+    assert high_path.stat().st_size > low_path.stat().st_size
+
+
+def test_save_figure_invalid_extension_raises(
+    canvas: GraphCanvas, tmp_path: Path
+) -> None:
+    """An unsupported extension makes matplotlib raise."""
+    path = tmp_path / "graph.xyz"
+
+    with pytest.raises(ValueError):
+        canvas.save_figure(path)

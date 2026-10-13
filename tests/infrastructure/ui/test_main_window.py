@@ -24,7 +24,11 @@ from infrastructure.serialization.json_project_storage import (
 from infrastructure.settings import AppSettings
 from infrastructure.ui.graph_canvas import ClickEvent, SelectionEvent
 from infrastructure.ui.interaction_mode import InteractionMode
-from infrastructure.ui.main_window import APP_NAME, MainWindow
+from infrastructure.ui.main_window import (
+    APP_NAME,
+    MainWindow,
+    _resolve_export_path,
+)
 
 
 @pytest.fixture
@@ -292,3 +296,34 @@ def test_drag_moves_all_selected_nodes(window: MainWindow) -> None:
     assert window._positions[2].x == pytest.approx(0.5, abs=1e-9)
     assert window._positions[2].y == pytest.approx(0.5, abs=1e-9)
     window._handle_canvas_drag_end()
+
+
+def test_resolve_export_path_keeps_known_suffix() -> None:
+    """A path with a known image suffix is returned unchanged."""
+    assert _resolve_export_path(Path("a.png")) == Path("a.png")
+    assert _resolve_export_path(Path("a.svg")) == Path("a.svg")
+    assert _resolve_export_path(Path("a.pdf")) == Path("a.pdf")
+    assert _resolve_export_path(Path("a.jpg")) == Path("a.jpg")
+    assert _resolve_export_path(Path("a.jpeg")) == Path("a.jpeg")
+
+
+def test_resolve_export_path_uppercase_suffix() -> None:
+    """Uppercase known suffixes are recognized."""
+    assert _resolve_export_path(Path("a.PNG")) == Path("a.PNG")
+
+
+def test_resolve_export_path_adds_default() -> None:
+    """A path without a known suffix gets the default PNG suffix."""
+    assert _resolve_export_path(Path("a")) == Path("a.png")
+    assert _resolve_export_path(Path("a.xyz")) == Path("a.png")
+    assert _resolve_export_path(Path("a.txt")) == Path("a.png")
+
+
+def test_export_image_writes_file(window: MainWindow, tmp_path: Path) -> None:
+    """The export menu action writes the canvas to a file."""
+    window._handle_add_node(0.5, 0.5)
+    path = tmp_path / "out.png"
+    window._canvas.save_figure(path)
+
+    assert path.exists()
+    assert path.stat().st_size > 0

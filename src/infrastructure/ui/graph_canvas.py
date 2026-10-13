@@ -3,6 +3,7 @@
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -96,6 +97,8 @@ LIGHT_NODE_LABEL = "#000000"
 LIGHT_WEIGHT_TEXT = "#000000"
 LIGHT_WEIGHT_BG = "#ffffff"
 
+DEFAULT_EXPORT_DPI = 200
+
 
 class GraphCanvas(FigureCanvasQTAgg):
     """A matplotlib canvas displaying a graph.
@@ -108,6 +111,11 @@ class GraphCanvas(FigureCanvasQTAgg):
     (with modifiers), a completed rubber-band selection, and drag
     motion. The canvas draws the rubber band itself while the user is
     dragging on empty space.
+
+    The canvas can export its current rendering to an image file. The
+    format is inferred from the file extension by matplotlib. The
+    export captures exactly what is displayed: highlights, selection
+    markers, labels, and the current theme background.
 
     Args:
         parent: Optional Qt parent widget.
@@ -197,6 +205,28 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._weight_bg_color = DARK_WEIGHT_BG if dark else LIGHT_WEIGHT_BG
         self._figure.patch.set_facecolor(self._bg_color)
         self._redraw()
+
+    def save_figure(
+        self,
+        path: Path,
+        dpi: int = DEFAULT_EXPORT_DPI,
+    ) -> None:
+        """Save the current rendering to an image file.
+
+        The output format is inferred from the file extension. Matplotlib
+        supports PNG, SVG, PDF, JPEG, and several others.
+
+        Args:
+            path: Destination file path. The extension determines the
+                output format.
+            dpi: Resolution for raster formats. Ignored for vector
+                formats such as SVG and PDF.
+
+        Raises:
+            OSError: If the file cannot be written.
+            ValueError: If the file extension is not a known format.
+        """
+        self._figure.savefig(str(path), dpi=dpi)
 
     def _configure_axes(self) -> None:
         """Set up axes limits and appearance."""
