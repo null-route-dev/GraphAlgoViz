@@ -7,8 +7,12 @@ import pytest
 from PySide6.QtCore import QSettings
 
 from infrastructure.settings import (
+    DEFAULT_ARROW_AT_MIDDLE,
+    DEFAULT_BUNDLE_PARALLEL,
     DEFAULT_DARK_THEME,
     DEFAULT_SNAP_TO_GRID,
+    KEY_ARROW_AT_MIDDLE,
+    KEY_BUNDLE_PARALLEL,
     KEY_DARK_THEME,
     KEY_SNAP_TO_GRID,
     AppSettings,
@@ -68,13 +72,57 @@ def test_set_snap_to_grid_false(app_settings: AppSettings) -> None:
     assert app_settings.snap_to_grid() is False
 
 
+def test_default_bundle_parallel_when_unset(app_settings: AppSettings) -> None:
+    """Without a saved value, the default bundle setting is returned."""
+    assert app_settings.bundle_parallel_edges() is DEFAULT_BUNDLE_PARALLEL
+
+
+def test_set_bundle_parallel_true(app_settings: AppSettings) -> None:
+    """Saving True makes bundle_parallel_edges return True."""
+    app_settings.set_bundle_parallel_edges(True)
+
+    assert app_settings.bundle_parallel_edges() is True
+
+
+def test_set_bundle_parallel_false(app_settings: AppSettings) -> None:
+    """Saving False makes bundle_parallel_edges return False."""
+    app_settings.set_bundle_parallel_edges(False)
+
+    assert app_settings.bundle_parallel_edges() is False
+
+
+def test_default_arrow_at_middle_when_unset(
+    app_settings: AppSettings,
+) -> None:
+    """Without a saved value, the default arrow setting is returned."""
+    assert app_settings.arrow_at_middle() is DEFAULT_ARROW_AT_MIDDLE
+
+
+def test_set_arrow_at_middle_true(app_settings: AppSettings) -> None:
+    """Saving True makes arrow_at_middle return True."""
+    app_settings.set_arrow_at_middle(True)
+
+    assert app_settings.arrow_at_middle() is True
+
+
+def test_set_arrow_at_middle_false(app_settings: AppSettings) -> None:
+    """Saving False makes arrow_at_middle return False."""
+    app_settings.set_arrow_at_middle(False)
+
+    assert app_settings.arrow_at_middle() is False
+
+
 def test_round_trip_through_new_instance(qsettings: QSettings) -> None:
-    """A second AppSettings sees the saved snap value."""
+    """A second AppSettings sees all saved values."""
     first = AppSettings(qsettings)
     first.set_snap_to_grid(True)
+    first.set_bundle_parallel_edges(True)
+    first.set_arrow_at_middle(True)
 
     second = AppSettings(qsettings)
     assert second.snap_to_grid() is True
+    assert second.bundle_parallel_edges() is True
+    assert second.arrow_at_middle() is True
 
 
 def test_string_true_for_snap(qsettings: QSettings) -> None:
@@ -91,3 +139,19 @@ def test_string_false_for_dark(qsettings: QSettings) -> None:
     qsettings.sync()
 
     assert AppSettings(qsettings).dark_theme() is False
+
+
+def test_string_true_for_bundle(qsettings: QSettings) -> None:
+    """A stored string "true" for bundle is interpreted as True."""
+    qsettings.setValue(KEY_BUNDLE_PARALLEL, "true")
+    qsettings.sync()
+
+    assert AppSettings(qsettings).bundle_parallel_edges() is True
+
+
+def test_string_false_for_arrow(qsettings: QSettings) -> None:
+    """A stored string "false" for arrow is interpreted as False."""
+    qsettings.setValue(KEY_ARROW_AT_MIDDLE, "false")
+    qsettings.sync()
+
+    assert AppSettings(qsettings).arrow_at_middle() is False
