@@ -110,10 +110,6 @@ def _snap(value: float) -> float:
 def _resolve_export_path(path: Path) -> Path:
     """Return the export path with a supported image extension.
 
-    If the path already has a supported extension, it is returned
-    unchanged. Otherwise the suffix is replaced with the default PNG
-    extension.
-
     Args:
         path: The path chosen by the user.
 
@@ -132,8 +128,9 @@ class MainWindow(QMainWindow):
     """Top-level window hosting the canvas, toolbar, and docks.
 
     The window owns the interaction mode, node positions, edit
-    history, selection, clipboard, theme, snap-to-grid flag, and
-    algorithm state. Every mutation is followed by a history commit.
+    history, selection, clipboard, theme, snap-to-grid flag, edge
+    display options, and algorithm state. Every mutation is followed
+    by a history commit.
     """
 
     def __init__(
@@ -178,6 +175,8 @@ class MainWindow(QMainWindow):
         self._current_path: Path | None = None
         self._dark = dark
         self._snap_to_grid = settings.snap_to_grid()
+        self._bundle_parallel = settings.bundle_parallel_edges()
+        self._arrow_at_middle = settings.arrow_at_middle()
         self._editing_enabled = True
 
         self._history = EditHistory(snapshot(repository.get(), self._positions))
@@ -194,6 +193,8 @@ class MainWindow(QMainWindow):
             on_drag_end=self._handle_canvas_drag_end,
             dark=dark,
         )
+        self._canvas.set_bundle_parallel(self._bundle_parallel)
+        self._canvas.set_arrow_at_middle(self._arrow_at_middle)
         self.setCentralWidget(self._canvas)
 
         self._animator = AlgorithmAnimator(self)
@@ -208,6 +209,8 @@ class MainWindow(QMainWindow):
         self._paste_action: QAction | None = None
         self._delete_action: QAction | None = None
         self._snap_action: QAction | None = None
+        self._bundle_action: QAction | None = None
+        self._arrow_action: QAction | None = None
         self._build_menu()
         self._build_toolbar()
         self._build_status_bar()
@@ -409,7 +412,7 @@ class MainWindow(QMainWindow):
             self._view_menu.addAction(self._matrix_dock.toggleViewAction())
 
     def _add_theme_action(self) -> None:
-        """Add theme and snap-to-grid toggles to the View menu."""
+        """Add theme and display toggles to the View menu."""
         if self._view_menu is None:
             return
         self._view_menu.addSeparator()
@@ -419,6 +422,18 @@ class MainWindow(QMainWindow):
         self._snap_action.setChecked(self._snap_to_grid)
         self._snap_action.triggered.connect(self._handle_toggle_snap)
         self._view_menu.addAction(self._snap_action)
+
+        self._bundle_action = QAction("Bundle parallel edges", self)
+        self._bundle_action.setCheckable(True)
+        self._bundle_action.setChecked(self._bundle_parallel)
+        self._bundle_action.triggered.connect(self._handle_toggle_bundle)
+        self._view_menu.addAction(self._bundle_action)
+
+        self._arrow_action = QAction("Arrow at middle", self)
+        self._arrow_action.setCheckable(True)
+        self._arrow_action.setChecked(self._arrow_at_middle)
+        self._arrow_action.triggered.connect(self._handle_toggle_arrow)
+        self._view_menu.addAction(self._arrow_action)
 
         self._view_menu.addSeparator()
 
@@ -450,6 +465,26 @@ class MainWindow(QMainWindow):
         """
         self._snap_to_grid = checked
         self._settings.set_snap_to_grid(checked)
+
+    def _handle_toggle_bundle(self, checked: bool) -> None:
+        """Enable or disable bundling of parallel edges.
+
+        Args:
+            checked: True to enable bundling.
+        """
+        self._bundle_parallel = checked
+        self._settings.set_bundle_parallel_edges(checked)
+        self._canvas.set_bundle_parallel(checked)
+
+    def _handle_toggle_arrow(self, checked: bool) -> None:
+        """Move directed edge arrows to or from the midpoint.
+
+        Args:
+            checked: True to draw arrows at the middle.
+        """
+        self._arrow_at_middle = checked
+        self._settings.set_arrow_at_middle(checked)
+        self._canvas.set_arrow_at_middle(checked)
 
     def _restore_mode_message(self) -> None:
         """Show the current mode in the status bar."""
@@ -970,6 +1005,10 @@ class MainWindow(QMainWindow):
     def _handle_add_edge(self, node_id: int | None) -> None:
         """Add an edge between two consecutively clicked nodes.
 
+        Clicking the same node twice creates a self-loop. The dialog
+        provides an explicit Cancel option for the case when the user
+        changes their mind.
+
         Args:
             node_id: Id of the node under the cursor, or None.
         """
@@ -983,11 +1022,6 @@ class MainWindow(QMainWindow):
             self._show_temporary_message(
                 f"Add edge: source is node {node_id}, click target"
             )
-            return
-
-        if self._pending_edge_source == node_id:
-            self._pending_edge_source = None
-            self._show_temporary_message("Add edge: cancelled")
             return
 
         source = self._pending_edge_source

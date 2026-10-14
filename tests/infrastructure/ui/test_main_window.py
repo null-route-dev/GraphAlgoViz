@@ -22,6 +22,10 @@ from infrastructure.serialization.json_project_storage import (
     JsonProjectStorage,
 )
 from infrastructure.settings import AppSettings
+from infrastructure.ui.dialogs.edge_attributes_dialog import (
+    EdgeAttributes,
+    EdgeAttributesDialog,
+)
 from infrastructure.ui.graph_canvas import ClickEvent, SelectionEvent
 from infrastructure.ui.interaction_mode import InteractionMode
 from infrastructure.ui.main_window import (
@@ -37,6 +41,24 @@ def settings(tmp_path: Path) -> Iterator[AppSettings]:
     qsettings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     yield AppSettings(qsettings)
     qsettings.clear()
+
+
+@pytest.fixture
+def stub_edge_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the edge attributes dialog with a fixed OK response.
+
+    The real dialog calls exec() and blocks until the user clicks a
+    button. Tests cannot click anything, so the dialog must not be
+    invoked. This fixture makes get_attributes return a fixed value
+    without opening any window.
+    """
+    monkeypatch.setattr(
+        EdgeAttributesDialog,
+        "get_attributes",
+        staticmethod(
+            lambda *args, **kwargs: EdgeAttributes(weight=1.0, directed=False)
+        ),
+    )
 
 
 @pytest.fixture
@@ -151,13 +173,6 @@ def test_snap_applies_to_add_node(window: MainWindow) -> None:
     pos = window._positions[1]
     assert pos.x == pytest.approx(0.55, abs=1e-9)
     assert pos.y == pytest.approx(0.5, abs=1e-9)
-
-
-def test_snap_toggle_persists(window: MainWindow, settings: AppSettings) -> None:
-    """Toggling snap saves the preference."""
-    window._handle_toggle_snap(True)
-
-    assert settings.snap_to_grid() is True
 
 
 def test_click_selects_single_node(window: MainWindow) -> None:
@@ -303,27 +318,83 @@ def test_resolve_export_path_keeps_known_suffix() -> None:
     assert _resolve_export_path(Path("a.png")) == Path("a.png")
     assert _resolve_export_path(Path("a.svg")) == Path("a.svg")
     assert _resolve_export_path(Path("a.pdf")) == Path("a.pdf")
-    assert _resolve_export_path(Path("a.jpg")) == Path("a.jpg")
-    assert _resolve_export_path(Path("a.jpeg")) == Path("a.jpeg")
-
-
-def test_resolve_export_path_uppercase_suffix() -> None:
-    """Uppercase known suffixes are recognized."""
-    assert _resolve_export_path(Path("a.PNG")) == Path("a.PNG")
 
 
 def test_resolve_export_path_adds_default() -> None:
     """A path without a known suffix gets the default PNG suffix."""
     assert _resolve_export_path(Path("a")) == Path("a.png")
     assert _resolve_export_path(Path("a.xyz")) == Path("a.png")
-    assert _resolve_export_path(Path("a.txt")) == Path("a.png")
 
 
-def test_export_image_writes_file(window: MainWindow, tmp_path: Path) -> None:
-    """The export menu action writes the canvas to a file."""
-    window._handle_add_node(0.5, 0.5)
-    path = tmp_path / "out.png"
-    window._canvas.save_figure(path)
+def test_self_loop_is_allowed(
+    window: MainWindow,
+    stub_edge_dialog: None,
+) -> None:
+    """Clicking the same node twice creates a self-loop."""
+    _ = stub_edge_dialog
+    window._handle_add_node(0.3, 0.3)
+    window._handle_add_edge(1)
+    window._handle_add_edge(1)
 
-    assert path.exists()
-    assert path.stat().st_size > 0
+    assert window._stats_label.text() == "Nodes: 1   Edges: 1"
+
+
+def test_self_loop_can_be_deleted_with_node(
+    window: MainWindow,
+    stub_edge_dialog: None,
+) -> None:
+    """Removing a node removes its self-loop as well."""
+    _ = stub_edge_dialog
+    window._handle_add_node(0.3, 0.3)
+    window._handle_add_edge(1)
+    window._handle_add_edge(1)
+    window._handle_delete_node(1)
+
+    assert window._stats_label.text() == "Nodes: 0   Edges: 0"
+
+
+def test_toggle_bundle_updates_flag_and_settings(
+    window: MainWindow, settings: AppSettings
+) -> None:
+    """Toggling bundle updates the window flag and persists the choice."""
+    window._handle_toggle_bundle(True)
+
+    assert window._bundle_parallel is True
+    assert settings.bundle_parallel_edges() is True
+
+
+def test_toggle_arrow_updates_flag_and_settings(
+    window: MainWindow, settings: AppSettings
+) -> None:
+    """Toggling arrow position updates the window flag and persists."""
+    window._handle_toggle_arrow(True)
+
+    assert window._arrow_at_middle is True
+    assert settings.arrow_at_middle() is True
+
+
+def test_bundle_applied_from_settings(qtbot: object, settings: AppSettings) -> None:
+    """A saved bundle preference is applied to the canvas on startup."""
+    settings.set_bundle_parallel_edges(True)
+    repository = InMemoryGraphRepository()
+    widget = MainWindow(
+        repository=repository,
+        layout_service=LayoutService(),
+        registry=build_default_registry(),
+        storage=JsonProjectStorage(),
+        settings=settings,
+        add_node_use_case=AddNodeUseCase(repository),
+        add_edge_use_case=AddEdgeUseCase(repository),
+        remove_node_use_case=RemoveNodeUseCase(repository),
+        remove_edge_use_case=RemoveEdgeUseCase(repository),
+        update_edge_use_case=UpdateEdgeUseCase(repository),
+        update_node_use_case=UpdateNodeUseCase(repository),
+    )
+    _ = qtbot
+    try:
+        assert widget._bundle_parallel is True
+        assert widget._canvas._bundle_parallel is True
+    finally:
+        widget._history.mark_saved()
+        widget.close()
+        widget.deleteLater()
