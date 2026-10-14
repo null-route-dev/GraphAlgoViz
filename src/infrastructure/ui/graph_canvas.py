@@ -8,7 +8,7 @@ from typing import Any
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from matplotlib.patches import FancyArrowPatch, Rectangle
+from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
 from PySide6.QtCore import QTimer
 
 from domain.entities.edge import Edge
@@ -24,8 +24,7 @@ class ClickEvent:
         x: Horizontal coordinate in the unit square.
         y: Vertical coordinate in the unit square.
         node_id: Id of the node under the cursor, or None.
-        edge: Endpoints of the edge under the cursor, or None. Only
-            set when no node was hit.
+        edge: Endpoints of the edge under the cursor, or None.
         shift: Whether Shift was held.
         double: Whether this was the second click of a double-click.
     """
@@ -73,12 +72,23 @@ COLOR_SELECTED = "#2ca02c"
 SELECTED_BORDER_WIDTH = 3.5
 
 ARROW_MUTATION_SCALE = 14
+ARROW_MIDDLE_SEGMENT = 0.02
 CURRENT_BORDER_WIDTH = 2.5
 
 TRANSITION_FRAME_MS = 20
 TRANSITION_STEP = 0.18
 
 ARC_SPACING = 0.18
+
+SELF_LOOP_BASE_RADIUS = 0.05
+SELF_LOOP_STACK_STEP = 0.018
+SELF_LOOP_BASE_OFFSET = 0.06
+SELF_LOOP_STACK_OFFSET = 0.022
+SELF_LOOP_LABEL_MARGIN = 0.02
+
+BUNDLE_MIN_WIDTH = 1.0
+BUNDLE_WIDTH_PER_EDGE = 0.6
+BUNDLE_MAX_WIDTH = 4.0
 
 SELECTION_FILL = "#1f77b4"
 SELECTION_ALPHA = 0.15
@@ -107,15 +117,17 @@ class GraphCanvas(FigureCanvasQTAgg):
     them to its axes without knowing about pixels. The canvas does not
     own the graph or its positions — it reads them on every draw.
 
-    Mouse activity is reported via three optional callbacks: a click
-    (with modifiers), a completed rubber-band selection, and drag
-    motion. The canvas draws the rubber band itself while the user is
-    dragging on empty space.
+    Three display options affect edge rendering:
 
-    The canvas can export its current rendering to an image file. The
-    format is inferred from the file extension by matplotlib. The
-    export captures exactly what is displayed: highlights, selection
-    markers, labels, and the current theme background.
+    - ``set_arrow_at_middle`` moves the arrow head of directed edges
+      from the target end to the midpoint of the edge, which is
+      helpful when arrowheads are obscured by dense node clusters.
+    - ``set_bundle_parallel`` collapses groups of parallel edges into
+      a single thick line with a summary label showing the count and
+      the list of weights. Arrow direction is not shown for bundles;
+      turn off bundling to inspect individual directions.
+    - Self-loops are drawn as small circles above their node. Multiple
+      self-loops on the same node are stacked.
 
     Args:
         parent: Optional Qt parent widget.
@@ -124,8 +136,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             rubber-band selection finishes.
         on_drag_move: Optional callback invoked on mouse motion while
             the left button is held down.
-        on_drag_end: Optional callback invoked on left button release
-            when no rubber band was active.
+        on_drag_end: Optional callback invoked on left button release.
         dark: Whether to start with the dark theme.
     """
 
@@ -145,6 +156,9 @@ class GraphCanvas(FigureCanvasQTAgg):
             self.setParent(parent)  # type: ignore[arg-type]
 
         self._dark = dark
+        self._bundle_parallel = False
+        self._arrow_at_middle = False
+
         self._bg_color = DARK_BG if dark else LIGHT_BG
         self._node_border_color = DARK_NODE_BORDER if dark else LIGHT_NODE_BORDER
         self._edge_color = DARK_EDGE if dark else LIGHT_EDGE
@@ -206,6 +220,29 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._figure.patch.set_facecolor(self._bg_color)
         self._redraw()
 
+    def set_bundle_parallel(self, bundle: bool) -> None:
+        """Enable or disable bundling of parallel edges.
+
+        Args:
+            bundle: True to draw parallel edges as a single thick line.
+        """
+        if bundle == self._bundle_parallel:
+            return
+        self._bundle_parallel = bundle
+        self._redraw()
+
+    def set_arrow_at_middle(self, middle: bool) -> None:
+        """Place arrow heads of directed edges at the midpoint.
+
+        Args:
+            middle: True to draw arrows at the middle, False to keep
+                them at the target end.
+        """
+        if middle == self._arrow_at_middle:
+            return
+        self._arrow_at_middle = middle
+        self._redraw()
+
     def save_figure(
         self,
         path: Path,
@@ -213,14 +250,10 @@ class GraphCanvas(FigureCanvasQTAgg):
     ) -> None:
         """Save the current rendering to an image file.
 
-        The output format is inferred from the file extension. Matplotlib
-        supports PNG, SVG, PDF, JPEG, and several others.
-
         Args:
             path: Destination file path. The extension determines the
                 output format.
-            dpi: Resolution for raster formats. Ignored for vector
-                formats such as SVG and PDF.
+            dpi: Resolution for raster formats.
 
         Raises:
             OSError: If the file cannot be written.
@@ -377,49 +410,109 @@ class GraphCanvas(FigureCanvasQTAgg):
         highlighted: frozenset[tuple[int, int]],
         current_edge: tuple[int, int] | None,
     ) -> None:
-        groups = _group_edges_by_endpoints(graph.edges())
+        self_loops: dict[int, list[Edge]] = {}
+        normal_edges: list[Edge] = []
+        for edge in graph.edges():
+            if edge.source == edge.target:
+                self_loops.setdefault(edge.source, []).append(edge)
+            else:
+                normal_edges.append(edge)
+
+        for node_id, loops in self_loops.items():
+            if node_id not in positions:
+                continue
+            for index, edge in enumerate(loops):
+                style = self._edge_style(edge, highlighted, current_edge)
+                self._draw_self_loop(
+                    node_id,
+                    edge,
+                    positions,
+                    style[0],
+                    style[1],
+                    style[2],
+                    index,
+                    len(loops),
+                )
+
+        groups = _group_edges_by_endpoints(normal_edges)
         for key, edges in groups.items():
+            if self._bundle_parallel and len(edges) > 1:
+                self._draw_bundle(key, edges, positions, highlighted, current_edge)
+                continue
             total = len(edges)
             for index, edge in enumerate(edges):
                 if edge.source not in positions or edge.target not in positions:
                     continue
                 start = positions[edge.source]
                 end = positions[edge.target]
-                is_highlighted = (edge.source, edge.target) in highlighted or (
-                    edge.target,
-                    edge.source,
-                ) in highlighted
-                is_current = current_edge is not None and (
-                    (edge.source, edge.target) == current_edge
-                    or (edge.target, edge.source) == current_edge
-                )
-                if is_current:
-                    color = COLOR_HIGHLIGHTED
-                    width = 2.5
-                    linestyle = "--"
-                elif is_highlighted:
-                    color = COLOR_CURRENT
-                    width = 2.5
-                    linestyle = "-"
-                else:
-                    color = self._edge_color
-                    width = 1.0
-                    linestyle = "-"
+                style = self._edge_style(edge, highlighted, current_edge)
                 rad = _effective_rad(edge, key, _arc_rad_for_index(index, total))
-                self._draw_edge(start, end, color, width, edge.directed, rad, linestyle)
-                self._draw_edge_weight(edge, start, end, rad)
+                self._draw_single_edge(
+                    edge, start, end, style[0], style[1], rad, style[2]
+                )
 
-    def _draw_edge(
+    def _edge_style(
+        self,
+        edge: Edge,
+        highlighted: frozenset[tuple[int, int]],
+        current_edge: tuple[int, int] | None,
+    ) -> tuple[str, float, str]:
+        is_current = current_edge is not None and (
+            (edge.source, edge.target) == current_edge
+            or (edge.target, edge.source) == current_edge
+        )
+        if is_current:
+            return COLOR_HIGHLIGHTED, 2.5, "--"
+        is_highlighted = (edge.source, edge.target) in highlighted or (
+            edge.target,
+            edge.source,
+        ) in highlighted
+        if is_highlighted:
+            return COLOR_CURRENT, 2.5, "-"
+        return self._edge_color, 1.0, "-"
+
+    def _draw_single_edge(
+        self,
+        edge: Edge,
+        start: Position,
+        end: Position,
+        color: str,
+        width: float,
+        rad: float,
+        linestyle: str,
+    ) -> None:
+        if edge.directed and not self._arrow_at_middle:
+            shortened_end = _shorten_towards(start, end, NODE_VISUAL_RADIUS)
+            arrow = FancyArrowPatch(
+                (start.x, start.y),
+                (shortened_end.x, shortened_end.y),
+                arrowstyle="->",
+                mutation_scale=ARROW_MUTATION_SCALE,
+                connectionstyle=f"arc3,rad={rad}",
+                color=color,
+                linewidth=width,
+                linestyle=linestyle,
+                shrinkA=0.0,
+                shrinkB=0.0,
+                zorder=1,
+            )
+            self._axes.add_patch(arrow)
+        else:
+            self._draw_line(start, end, color, width, rad, linestyle)
+            if edge.directed and self._arrow_at_middle:
+                self._draw_middle_arrow(start, end, color, rad)
+        self._draw_edge_weight(edge, start, end, rad)
+
+    def _draw_line(
         self,
         start: Position,
         end: Position,
         color: str,
         width: float,
-        directed: bool,
         rad: float,
         linestyle: str,
     ) -> None:
-        if rad == 0.0 and not directed and linestyle == "-":
+        if rad == 0.0:
             self._axes.plot(
                 [start.x, end.x],
                 [start.y, end.y],
@@ -429,22 +522,10 @@ class GraphCanvas(FigureCanvasQTAgg):
                 zorder=1,
             )
             return
-
-        if directed:
-            shortened_end = _shorten_towards(start, end, NODE_VISUAL_RADIUS)
-            tail = (start.x, start.y)
-            head = (shortened_end.x, shortened_end.y)
-            style = "->"
-        else:
-            tail = (start.x, start.y)
-            head = (end.x, end.y)
-            style = "-"
-
         arrow = FancyArrowPatch(
-            tail,
-            head,
-            arrowstyle=style,
-            mutation_scale=ARROW_MUTATION_SCALE,
+            (start.x, start.y),
+            (end.x, end.y),
+            arrowstyle="-",
             connectionstyle=f"arc3,rad={rad}",
             color=color,
             linewidth=width,
@@ -454,6 +535,152 @@ class GraphCanvas(FigureCanvasQTAgg):
             zorder=1,
         )
         self._axes.add_patch(arrow)
+
+    def _draw_middle_arrow(
+        self,
+        start: Position,
+        end: Position,
+        color: str,
+        rad: float,
+    ) -> None:
+        mid_x, mid_y = _arc_midpoint(start, end, rad)
+        dx = end.x - start.x
+        dy = end.y - start.y
+        length = math.hypot(dx, dy)
+        if length == 0.0:
+            return
+        ux = dx / length
+        uy = dy / length
+        tail = (
+            mid_x - ARROW_MIDDLE_SEGMENT * ux,
+            mid_y - ARROW_MIDDLE_SEGMENT * uy,
+        )
+        head = (
+            mid_x + ARROW_MIDDLE_SEGMENT * ux,
+            mid_y + ARROW_MIDDLE_SEGMENT * uy,
+        )
+        arrow = FancyArrowPatch(
+            tail,
+            head,
+            arrowstyle="-|>",
+            mutation_scale=ARROW_MUTATION_SCALE,
+            color=color,
+            linewidth=1.0,
+            shrinkA=0.0,
+            shrinkB=0.0,
+            zorder=1.5,
+        )
+        self._axes.add_patch(arrow)
+
+    def _draw_self_loop(
+        self,
+        node_id: int,
+        edge: Edge,
+        positions: dict[int, Position],
+        color: str,
+        width: float,
+        linestyle: str,
+        index: int,
+        total: int,
+    ) -> None:
+        position = positions[node_id]
+        radius = SELF_LOOP_BASE_RADIUS + SELF_LOOP_STACK_STEP * index
+        offset_y = SELF_LOOP_BASE_OFFSET + SELF_LOOP_STACK_OFFSET * index
+        center_x = position.x
+        center_y = position.y + offset_y
+        circle = Circle(
+            (center_x, center_y),
+            radius,
+            edgecolor=color,
+            facecolor="none",
+            linewidth=width,
+            linestyle=linestyle,
+            zorder=1,
+        )
+        self._axes.add_patch(circle)
+        label_x = center_x + radius + SELF_LOOP_LABEL_MARGIN
+        self._axes.text(
+            label_x,
+            center_y,
+            f"{edge.weight:g}",
+            ha="left",
+            va="center",
+            color=self._weight_text_color,
+            fontsize=8,
+            bbox={
+                "boxstyle": "round,pad=0.15",
+                "facecolor": self._weight_bg_color,
+                "edgecolor": "none",
+            },
+            zorder=1.5,
+        )
+
+    def _draw_bundle(
+        self,
+        key: tuple[int, int],
+        edges: list[Edge],
+        positions: dict[int, Position],
+        highlighted: frozenset[tuple[int, int]],
+        current_edge: tuple[int, int] | None,
+    ) -> None:
+        source, target = key
+        if source not in positions or target not in positions:
+            return
+        start = positions[source]
+        end = positions[target]
+
+        any_current = current_edge is not None and any(
+            (e.source, e.target) == current_edge or (e.target, e.source) == current_edge
+            for e in edges
+        )
+        any_highlighted = any(
+            (e.source, e.target) in highlighted or (e.target, e.source) in highlighted
+            for e in edges
+        )
+        if any_current:
+            color = COLOR_HIGHLIGHTED
+            linestyle = "--"
+        elif any_highlighted:
+            color = COLOR_CURRENT
+            linestyle = "-"
+        else:
+            color = self._edge_color
+            linestyle = "-"
+
+        count = len(edges)
+        width = min(
+            BUNDLE_MIN_WIDTH + BUNDLE_WIDTH_PER_EDGE * (count - 1),
+            BUNDLE_MAX_WIDTH,
+        )
+        self._axes.plot(
+            [start.x, end.x],
+            [start.y, end.y],
+            color=color,
+            linewidth=width,
+            linestyle=linestyle,
+            zorder=1,
+        )
+
+        weights = sorted(e.weight for e in edges)
+        weight_text = ", ".join(f"{w:g}" for w in weights)
+        label = f"\u00d7{count} ({weight_text})"
+        mid_x = (start.x + end.x) / 2.0
+        mid_y = (start.y + end.y) / 2.0
+        self._axes.text(
+            mid_x,
+            mid_y,
+            label,
+            ha="center",
+            va="center",
+            color=self._weight_text_color,
+            fontsize=8,
+            bbox={
+                "boxstyle": "round,pad=0.15",
+                "facecolor": self._weight_bg_color,
+                "edgecolor": "none",
+            },
+            zorder=1.5,
+        )
 
     def _draw_edge_weight(
         self,
@@ -728,6 +955,8 @@ def _group_edges_by_endpoints(
     edges: list[Edge],
 ) -> dict[tuple[int, int], list[Edge]]:
     """Group edges by their unordered pair of endpoints.
+
+    Self-loops are not expected here; the caller filters them out.
 
     Args:
         edges: The edges to group.

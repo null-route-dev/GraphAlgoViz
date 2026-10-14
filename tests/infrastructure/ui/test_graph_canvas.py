@@ -24,7 +24,7 @@ from infrastructure.ui.graph_canvas import (
 
 @pytest.fixture
 def canvas(qtbot: object) -> Iterator[GraphCanvas]:
-    """Return a GraphCanvas for export tests."""
+    """Return a GraphCanvas for export and toggle tests."""
     _ = qtbot
     widget = GraphCanvas()
     yield widget
@@ -252,3 +252,35 @@ def test_save_figure_invalid_extension_raises(
 
     with pytest.raises(ValueError):
         canvas.save_figure(path)
+
+
+def test_bundle_parallel_default_off(canvas: GraphCanvas) -> None:
+    """Bundling is off by default."""
+    assert canvas._bundle_parallel is False
+
+
+def test_set_bundle_parallel_updates_flag(canvas: GraphCanvas) -> None:
+    """Enabling bundling flips the canvas flag."""
+    canvas.set_bundle_parallel(True)
+
+    assert canvas._bundle_parallel is True
+
+
+def test_set_bundle_parallel_is_idempotent(canvas: GraphCanvas) -> None:
+    """Setting the same value does not error."""
+    canvas.set_bundle_parallel(True)
+    canvas.set_bundle_parallel(True)
+
+    assert canvas._bundle_parallel is True
+
+
+def test_arrow_at_middle_default_off(canvas: GraphCanvas) -> None:
+    """Arrows at middle are off by default."""
+    assert canvas._arrow_at_middle is False
+
+
+def test_set_arrow_at_middle_updates_flag(canvas: GraphCanvas) -> None:
+    """Enabling middle arrows flips the canvas flag."""
+    canvas.set_arrow_at_middle(True)
+
+    assert canvas._arrow_at_middle is True
