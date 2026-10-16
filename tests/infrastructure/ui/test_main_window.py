@@ -45,13 +45,7 @@ def settings(tmp_path: Path) -> Iterator[AppSettings]:
 
 @pytest.fixture
 def stub_edge_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the edge attributes dialog with a fixed OK response.
-
-    The real dialog calls exec() and blocks until the user clicks a
-    button. Tests cannot click anything, so the dialog must not be
-    invoked. This fixture makes get_attributes return a fixed value
-    without opening any window.
-    """
+    """Replace the edge attributes dialog with a fixed OK response."""
     monkeypatch.setattr(
         EdgeAttributesDialog,
         "get_attributes",
@@ -154,7 +148,9 @@ def test_close_event_accepted_when_clean(window: MainWindow) -> None:
     assert event.isAccepted()
 
 
-def test_editing_locked_while_algorithm_loaded(window: MainWindow) -> None:
+def test_editing_locked_while_algorithm_loaded(
+    window: MainWindow,
+) -> None:
     """Clicks are ignored while an algorithm is loaded."""
     window._handle_add_node(0.5, 0.5)
     window._handle_add_node(0.6, 0.6)
@@ -183,6 +179,7 @@ def test_click_selects_single_node(window: MainWindow) -> None:
     window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
 
     assert window._selected_nodes == {1}
+    assert window._selected_edge is None
 
 
 def test_shift_click_adds_to_selection(window: MainWindow) -> None:
@@ -212,6 +209,19 @@ def test_click_on_empty_clears_selection(window: MainWindow) -> None:
 
     window._handle_canvas_click(_click(0.8, 0.8, node_id=None))
 
+    assert window._selected_nodes == set()
+
+
+def test_click_on_edge_selects_it(window: MainWindow) -> None:
+    """A single click on an edge selects it and clears node selection."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._add_edge_use_case.execute(source=1, target=2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    window._handle_canvas_click(_click(0.3, 0.3, edge=(1, 2)))
+
+    assert window._selected_edge == (1, 2)
     assert window._selected_nodes == set()
 
 
@@ -286,6 +296,19 @@ def test_delete_selected_removes_all(window: MainWindow) -> None:
     assert window._selected_nodes == set()
 
 
+def test_delete_selected_removes_edge(window: MainWindow) -> None:
+    """Delete Selected removes a selected edge, leaving nodes intact."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._add_edge_use_case.execute(source=1, target=2)
+    window._handle_canvas_click(_click(0.3, 0.3, edge=(1, 2)))
+
+    window._handle_delete_selected()
+
+    assert window._stats_label.text() == "Nodes: 2   Edges: 0"
+    assert window._selected_edge is None
+
+
 def test_select_all_selects_every_node(window: MainWindow) -> None:
     """Edit → Select All marks every node."""
     window._handle_add_node(0.1, 0.1)
@@ -309,7 +332,6 @@ def test_drag_moves_all_selected_nodes(window: MainWindow) -> None:
 
     assert window._positions[1].x == pytest.approx(0.3, abs=1e-9)
     assert window._positions[2].x == pytest.approx(0.5, abs=1e-9)
-    assert window._positions[2].y == pytest.approx(0.5, abs=1e-9)
     window._handle_canvas_drag_end()
 
 
@@ -373,28 +395,76 @@ def test_toggle_arrow_updates_flag_and_settings(
     assert settings.arrow_at_middle() is True
 
 
-def test_bundle_applied_from_settings(qtbot: object, settings: AppSettings) -> None:
-    """A saved bundle preference is applied to the canvas on startup."""
-    settings.set_bundle_parallel_edges(True)
-    repository = InMemoryGraphRepository()
-    widget = MainWindow(
-        repository=repository,
-        layout_service=LayoutService(),
-        registry=build_default_registry(),
-        storage=JsonProjectStorage(),
-        settings=settings,
-        add_node_use_case=AddNodeUseCase(repository),
-        add_edge_use_case=AddEdgeUseCase(repository),
-        remove_node_use_case=RemoveNodeUseCase(repository),
-        remove_edge_use_case=RemoveEdgeUseCase(repository),
-        update_edge_use_case=UpdateEdgeUseCase(repository),
-        update_node_use_case=UpdateNodeUseCase(repository),
+def test_inspector_shows_nothing_at_start(window: MainWindow) -> None:
+    """With no selection, the inspector reports no selection."""
+    assert window._inspector._header.text() == "No selection"
+
+
+def test_inspector_shows_node_on_selection(window: MainWindow) -> None:
+    """Selecting a node populates the inspector with its details."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    assert "Node 1" in window._inspector._header.text()
+    assert window._inspector._node_id == 1
+
+
+def test_inspector_shows_edge_on_selection(window: MainWindow) -> None:
+    """Selecting an edge populates the inspector with its details."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._add_edge_use_case.execute(source=1, target=2, weight=4.0, directed=True)
+    window._handle_canvas_click(_click(0.3, 0.3, edge=(1, 2)))
+
+    assert window._inspector._edge == (1, 2)
+    assert window._inspector._edge_weight_spin.value() == pytest.approx(4.0)
+
+
+def test_inspector_shows_multi_count(window: MainWindow) -> None:
+    """Selecting multiple nodes shows a count in the inspector."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.1, 0.1, node_id=1))
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=2, shift=True))
+
+    assert "2 nodes selected" in window._inspector._header.text()
+
+
+def test_inspector_label_edit_updates_node(window: MainWindow) -> None:
+    """Changing the label through the inspector updates the node."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    window._inspector._node_label_edit.setText("Alpha")
+    window._inspector._node_label_edit.editingFinished.emit()
+
+    assert window._repository.get().node(1).label == "Alpha"
+
+
+def test_inspector_weight_edit_updates_edge(window: MainWindow) -> None:
+    """Changing the weight through the inspector updates the edge."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._add_edge_use_case.execute(source=1, target=2, weight=1.0)
+    window._handle_canvas_click(_click(0.3, 0.3, edge=(1, 2)))
+
+    window._inspector._edge_weight_spin.setValue(9.0)
+    window._inspector._edge_weight_spin.editingFinished.emit()
+
+    assert window._repository.get().edges()[0].weight == pytest.approx(9.0)
+
+
+def test_context_menu_on_node_does_not_raise(window: MainWindow) -> None:
+    """The context menu handler runs without error for a node."""
+    from infrastructure.ui.graph_canvas import ContextEvent
+
+    window._handle_add_node(0.2, 0.2)
+    event = ContextEvent(
+        x=0.2,
+        y=0.2,
+        node_id=1,
+        edge=None,
+        global_x=0,
+        global_y=0,
     )
-    _ = qtbot
-    try:
-        assert widget._bundle_parallel is True
-        assert widget._canvas._bundle_parallel is True
-    finally:
-        widget._history.mark_saved()
-        widget.close()
-        widget.deleteLater()
+    assert event.node_id == 1

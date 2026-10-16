@@ -42,9 +42,11 @@ from infrastructure.ui.dialogs.node_attributes_dialog import (
 )
 from infrastructure.ui.graph_canvas import (
     ClickEvent,
+    ContextEvent,
     GraphCanvas,
     SelectionEvent,
 )
+from infrastructure.ui.inspector_panel import InspectorPanel
 from infrastructure.ui.interaction_mode import InteractionMode
 from infrastructure.ui.matrix_view import MatrixView
 from infrastructure.ui.theme import apply_theme
@@ -165,6 +167,7 @@ class MainWindow(QMainWindow):
         self._mode = InteractionMode.SELECT
         self._pending_edge_source: int | None = None
         self._selected_nodes: set[int] = set()
+        self._selected_edge: tuple[int, int] | None = None
         self._drag_node: int | None = None
         self._drag_click: tuple[float, float] | None = None
         self._drag_initial_positions: dict[int, Position] = {}
@@ -188,6 +191,7 @@ class MainWindow(QMainWindow):
         self._canvas = GraphCanvas(
             self,
             on_click=self._handle_canvas_click,
+            on_context_menu=self._handle_context_menu,
             on_selection_complete=self._handle_selection_complete,
             on_drag_move=self._handle_canvas_drag_move,
             on_drag_end=self._handle_canvas_drag_end,
@@ -215,6 +219,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_status_bar()
         self._build_algorithm_panel()
+        self._build_inspector_panel()
         self._build_matrix_panel()
         self._add_theme_action()
         self._refresh_canvas()
@@ -222,6 +227,7 @@ class MainWindow(QMainWindow):
         self._update_graph_stats()
         self._update_step_availability()
         self._refresh_action_states()
+        self._refresh_inspector()
 
     @property
     def mode(self) -> InteractionMode:
@@ -245,8 +251,10 @@ class MainWindow(QMainWindow):
         self._drag_changed = False
         if mode is not InteractionMode.SELECT:
             self._selected_nodes.clear()
+            self._selected_edge = None
         self._restore_mode_message()
         self._refresh_canvas()
+        self._refresh_inspector()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Confirm unsaved changes before closing the window.
@@ -398,6 +406,20 @@ class MainWindow(QMainWindow):
         if self._view_menu is not None:
             self._view_menu.addAction(self._algorithm_dock.toggleViewAction())
 
+    def _build_inspector_panel(self) -> None:
+        """Create the inspector panel and dock it on the right."""
+        self._inspector = InspectorPanel(self)
+        self._inspector.node_label_changed.connect(self._on_inspector_node_label)
+        self._inspector.edge_weight_changed.connect(self._on_inspector_edge_weight)
+        self._inspector.edge_directed_changed.connect(self._on_inspector_edge_directed)
+
+        self._inspector_dock = QDockWidget("Inspector", self)
+        self._inspector_dock.setWidget(self._inspector)
+        self._inspector_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._inspector_dock)
+        if self._view_menu is not None:
+            self._view_menu.addAction(self._inspector_dock.toggleViewAction())
+
     def _build_matrix_panel(self) -> None:
         """Create the matrix view and dock it at the bottom."""
         self._matrix_view = MatrixView(self)
@@ -512,6 +534,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_action_states(self) -> None:
         """Update the enabled state of the Edit menu actions."""
+        has_selection = bool(self._selected_nodes) or (self._selected_edge is not None)
         if self._undo_action is not None:
             self._undo_action.setEnabled(
                 self._editing_enabled and self._history.can_undo()
@@ -529,9 +552,7 @@ class MainWindow(QMainWindow):
                 self._editing_enabled and self._clipboard is not None
             )
         if self._delete_action is not None:
-            self._delete_action.setEnabled(
-                self._editing_enabled and bool(self._selected_nodes)
-            )
+            self._delete_action.setEnabled(self._editing_enabled and has_selection)
 
     def _sync_available_nodes(self) -> None:
         """Update the panel's node lists from the current graph."""
@@ -567,6 +588,7 @@ class MainWindow(QMainWindow):
         self._history.push(state)
         self._refresh_action_states()
         self._update_window_title()
+        self._refresh_inspector()
 
     def _restore(self, state: GraphState) -> None:
         """Replace the live graph and positions with a snapshot.
@@ -580,12 +602,77 @@ class MainWindow(QMainWindow):
         self._drag_node = None
         self._drag_click = None
         self._selected_nodes.clear()
+        self._selected_edge = None
         self._drag_changed = False
         self._sync_available_nodes()
         self._update_graph_stats()
         self._refresh_canvas()
         self._refresh_action_states()
         self._update_window_title()
+        self._refresh_inspector()
+
+    def _refresh_inspector(self) -> None:
+        """Update the inspector panel to match the current selection."""
+        form = self._inspector._form
+        row_count = form.rowCount()
+
+        def set_rows(visible: tuple[int, ...]) -> None:
+            for index in range(row_count):
+                form.setRowVisible(index, index in visible)
+
+        if self._selected_edge is not None:
+            edge = self._find_edge(*self._selected_edge)
+            if edge is None:
+                self._inspector.show_nothing()
+                return
+            arrow = "\u2192" if edge.directed else "\u2014"
+            self._inspector._header.setText(f"Edge {edge.source} {arrow} {edge.target}")
+            self._inspector._edge_endpoints_label.setText(
+                f"{edge.source} \u2192 {edge.target}"
+            )
+            self._inspector._edge_weight_spin.blockSignals(True)
+            self._inspector._edge_weight_spin.setValue(edge.weight)
+            self._inspector._edge_weight_spin.blockSignals(False)
+            self._inspector._edge_directed_check.blockSignals(True)
+            self._inspector._edge_directed_check.setChecked(edge.directed)
+            self._inspector._edge_directed_check.blockSignals(False)
+            self._inspector._node_id = None
+            self._inspector._edge = (edge.source, edge.target)
+            set_rows((3, 4, 5))
+            return
+
+        if len(self._selected_nodes) == 1:
+            node_id = next(iter(self._selected_nodes))
+            graph = self._repository.get()
+            if not graph.has_node(node_id):
+                self._inspector.show_nothing()
+                return
+            node = graph.node(node_id)
+            degree = len(graph.neighbors(node_id))
+            self._inspector._header.setText(f"Node {node_id}")
+            self._inspector._node_id_label.setText(str(node_id))
+            self._inspector._node_label_edit.blockSignals(True)
+            self._inspector._node_label_edit.setText(node.label)
+            self._inspector._node_label_edit.blockSignals(False)
+            self._inspector._node_degree_label.setText(str(degree))
+            self._inspector._node_id = node_id
+            self._inspector._edge = None
+            set_rows((0, 1, 2))
+            return
+
+        if len(self._selected_nodes) > 1:
+            self._inspector._header.setText(
+                f"{len(self._selected_nodes)} nodes selected"
+            )
+            self._inspector._node_id = None
+            self._inspector._edge = None
+            set_rows(())
+            return
+
+        self._inspector._header.setText("No selection")
+        self._inspector._node_id = None
+        self._inspector._edge = None
+        set_rows(())
 
     def _handle_undo(self) -> None:
         """Undo the last committed change."""
@@ -664,6 +751,7 @@ class MainWindow(QMainWindow):
                 directed=edge.directed,
             )
         self._selected_nodes = set(new_ids)
+        self._selected_edge = None
         self._commit()
         self._sync_available_nodes()
         self._update_graph_stats()
@@ -675,11 +763,22 @@ class MainWindow(QMainWindow):
         if self._mode is not InteractionMode.SELECT:
             self.set_mode(InteractionMode.SELECT)
         self._selected_nodes = {node.id for node in self._repository.get().nodes()}
+        self._selected_edge = None
         self._refresh_action_states()
         self._refresh_canvas()
+        self._refresh_inspector()
 
     def _handle_delete_selected(self) -> None:
-        """Delete every selected node and its incident edges."""
+        """Delete the current selection.
+
+        If an edge is selected, only that edge is removed. Otherwise
+        every selected node and its incident edges are removed.
+        """
+        if self._selected_edge is not None:
+            source, target = self._selected_edge
+            self._selected_edge = None
+            self._handle_delete_edge((source, target))
+            return
         if not self._selected_nodes:
             return
         graph = self._repository.get()
@@ -750,6 +849,7 @@ class MainWindow(QMainWindow):
         self._drag_node = None
         self._drag_click = None
         self._selected_nodes.clear()
+        self._selected_edge = None
         self._clipboard = None
         self._drag_changed = False
         self._reset_algorithm()
@@ -759,6 +859,7 @@ class MainWindow(QMainWindow):
         self._update_graph_stats()
         self._refresh_action_states()
         self._update_window_title()
+        self._refresh_inspector()
         self._show_temporary_message("New project")
 
     def _handle_open_project(self) -> None:
@@ -783,6 +884,7 @@ class MainWindow(QMainWindow):
         self._drag_node = None
         self._drag_click = None
         self._selected_nodes.clear()
+        self._selected_edge = None
         self._clipboard = None
         self._drag_changed = False
         self._reset_algorithm()
@@ -792,6 +894,7 @@ class MainWindow(QMainWindow):
         self._update_graph_stats()
         self._refresh_action_states()
         self._update_window_title()
+        self._refresh_inspector()
         self._show_temporary_message(f"Opened {path.name}")
 
     def _handle_save_project(self) -> bool:
@@ -849,6 +952,7 @@ class MainWindow(QMainWindow):
             event: The click event.
         """
         if event.node_id is not None:
+            self._selected_edge = None
             if event.double:
                 self._handle_edit_node(event.node_id)
                 return
@@ -859,22 +963,36 @@ class MainWindow(QMainWindow):
                     self._selected_nodes.add(event.node_id)
                 self._refresh_action_states()
                 self._refresh_canvas()
+                self._refresh_inspector()
                 return
             if event.node_id not in self._selected_nodes:
                 self._selected_nodes = {event.node_id}
                 self._refresh_action_states()
                 self._refresh_canvas()
+                self._refresh_inspector()
             self._start_drag(event)
             return
 
-        if event.edge is not None and not event.shift:
-            self._handle_edit_edge(event.edge)
-            return
-
-        if not event.shift and self._selected_nodes:
-            self._selected_nodes.clear()
+        if event.edge is not None:
+            if event.double:
+                self._handle_edit_edge(event.edge)
+                return
+            if not event.shift:
+                self._selected_nodes.clear()
+            self._selected_edge = event.edge
             self._refresh_action_states()
             self._refresh_canvas()
+            self._refresh_inspector()
+            return
+
+        if not event.shift and (
+            self._selected_nodes or self._selected_edge is not None
+        ):
+            self._selected_nodes.clear()
+            self._selected_edge = None
+            self._refresh_action_states()
+            self._refresh_canvas()
+            self._refresh_inspector()
 
     def _start_drag(self, event: ClickEvent) -> None:
         """Begin dragging the currently selected nodes.
@@ -917,10 +1035,64 @@ class MainWindow(QMainWindow):
             self._selected_nodes |= chosen
         else:
             self._selected_nodes = chosen
+        self._selected_edge = None
         self._refresh_action_states()
         self._refresh_canvas()
+        self._refresh_inspector()
         if chosen:
             self._show_temporary_message(f"Selected {len(chosen)} node(s)")
+
+    def _handle_context_menu(self, event: ContextEvent) -> None:
+        """Show a context menu for the clicked element.
+
+        Args:
+            event: The context event with target and screen position.
+        """
+        if self._algorithm_state is not AlgorithmState.IDLE:
+            return
+        menu = QMenu(self)
+        if event.node_id is not None:
+            node_id = event.node_id
+            menu.addAction(
+                "Edit label",
+                lambda: self._handle_edit_node(node_id),
+            )
+            menu.addAction(
+                "Delete node",
+                lambda: self._handle_delete_node(node_id),
+            )
+            menu.addAction(
+                "Set as start node",
+                lambda: self._handle_set_start_node(node_id),
+            )
+        elif event.edge is not None:
+            edge = event.edge
+            menu.addAction(
+                "Edit attributes",
+                lambda: self._handle_edit_edge(edge),
+            )
+            menu.addAction(
+                "Delete edge",
+                lambda: self._handle_delete_edge(edge),
+            )
+        else:
+            x, y = event.x, event.y
+            menu.addAction(
+                "Add node here",
+                lambda: self._handle_add_node(x, y),
+            )
+        from PySide6.QtCore import QPoint
+
+        menu.exec(QPoint(event.global_x, event.global_y))
+
+    def _handle_set_start_node(self, node_id: int) -> None:
+        """Set the algorithm panel's start node to the given id.
+
+        Args:
+            node_id: Identifier of the node to mark as start.
+        """
+        self._panel.set_start_node(node_id)
+        self._show_temporary_message(f"Start node set to {node_id}")
 
     def _handle_canvas_drag_move(self, x: float, y: float) -> None:
         """Move the currently dragged node and its selected peers.
@@ -1005,9 +1177,7 @@ class MainWindow(QMainWindow):
     def _handle_add_edge(self, node_id: int | None) -> None:
         """Add an edge between two consecutively clicked nodes.
 
-        Clicking the same node twice creates a self-loop. The dialog
-        provides an explicit Cancel option for the case when the user
-        changes their mind.
+        Clicking the same node twice creates a self-loop.
 
         Args:
             node_id: Id of the node under the cursor, or None.
@@ -1127,10 +1297,81 @@ class MainWindow(QMainWindow):
         """
         source, target = edge
         self._remove_edge_use_case.execute(source=source, target=target)
+        if self._selected_edge == (source, target):
+            self._selected_edge = None
         self._commit()
         self._update_graph_stats()
         self._refresh_canvas()
         self._show_temporary_message(f"Deleted edge {source} -> {target}")
+
+    def _on_inspector_node_label(self, node_id: int, label: str) -> None:
+        """Apply a label change coming from the inspector.
+
+        Args:
+            node_id: Id of the edited node.
+            label: The new label.
+        """
+        graph = self._repository.get()
+        if not graph.has_node(node_id):
+            return
+        if graph.node(node_id).label == label:
+            return
+        self._update_node_use_case.execute(node_id=node_id, label=label)
+        self._commit()
+        self._refresh_canvas()
+        self._show_temporary_message(f"Node {node_id} label updated")
+
+    def _on_inspector_edge_weight(
+        self, source: int, target: int, weight: float
+    ) -> None:
+        """Apply a weight change coming from the inspector.
+
+        Args:
+            source: Source node id.
+            target: Target node id.
+            weight: The new weight.
+        """
+        current = self._find_edge(source, target)
+        if current is None:
+            return
+        if current.weight == weight:
+            return
+        self._update_edge_use_case.execute(
+            source=current.source,
+            target=current.target,
+            weight=weight,
+            directed=current.directed,
+        )
+        self._commit()
+        self._refresh_canvas()
+        self._show_temporary_message(
+            f"Edge {source} -> {target} weight set to {weight:g}"
+        )
+
+    def _on_inspector_edge_directed(
+        self, source: int, target: int, directed: bool
+    ) -> None:
+        """Apply a directed flag change coming from the inspector.
+
+        Args:
+            source: Source node id.
+            target: Target node id.
+            directed: The new directed flag.
+        """
+        current = self._find_edge(source, target)
+        if current is None:
+            return
+        if current.directed == directed:
+            return
+        self._update_edge_use_case.execute(
+            source=current.source,
+            target=current.target,
+            weight=current.weight,
+            directed=directed,
+        )
+        self._commit()
+        self._refresh_canvas()
+        self._show_temporary_message(f"Edge {source} -> {target} updated")
 
     def _on_run_requested(
         self,
@@ -1171,6 +1412,7 @@ class MainWindow(QMainWindow):
         self._drag_node = None
         self._drag_click = None
         self._selected_nodes.clear()
+        self._selected_edge = None
         self._drag_changed = False
         self._set_editing_enabled(False)
         self._algorithm_state = AlgorithmState.RUNNING
@@ -1179,6 +1421,7 @@ class MainWindow(QMainWindow):
         self._matrix_view.clear_matrix()
         self._animator.start(algorithm, self._current_interval_ms)
         self._update_step_availability()
+        self._refresh_inspector()
 
     def _on_pause_requested(self) -> None:
         """Pause the running algorithm."""
@@ -1281,4 +1524,5 @@ class MainWindow(QMainWindow):
             graph=self._repository.get(),
             positions=self._positions,
             selected_nodes=frozenset(self._selected_nodes),
+            selected_edge=self._selected_edge,
         )
