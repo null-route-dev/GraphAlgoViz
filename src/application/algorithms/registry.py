@@ -7,6 +7,7 @@ from application.algorithms.astar import AStar
 from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.bipartite_check import BipartiteCheck
+from application.algorithms.bipartite_matching import BipartiteMatching
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.bridges_articulations import BridgesAndArticulations
 from application.algorithms.depth_first_search import DepthFirstSearch
@@ -18,6 +19,7 @@ from application.algorithms.max_flow import MaxFlow
 from application.algorithms.prim_mst import PrimMST
 from application.algorithms.tarjan_scc import TarjanSCC
 from application.algorithms.topological_sort import TopologicalSort
+from application.algorithms.traveling_salesman import TravelingSalesman
 from domain.entities.graph import Graph
 
 AlgorithmFactory = Callable[[Graph, int, int | None], BaseAlgorithm]
@@ -316,6 +318,28 @@ def build_default_registry() -> AlgorithmRegistry:
                 "independent sets by attempting a two-coloring."
             ),
             factory=_no_target(BipartiteCheck),
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="matching",
+            display_name="Maximum Bipartite Matching",
+            description=(
+                "Finds the largest matching in a bipartite graph "
+                "using Kuhn's augmenting path algorithm."
+            ),
+            factory=_no_target(BipartiteMatching),
+        )
+    )
+    registry.register(
+        AlgorithmInfo(
+            id="tsp",
+            display_name="Traveling Salesman (NN + 2-opt)",
+            description=(
+                "Builds a tour visiting every node using nearest "
+                "neighbor followed by 2-opt improvement."
+            ),
+            factory=_no_target(TravelingSalesman),
         )
     )
     registry.register(

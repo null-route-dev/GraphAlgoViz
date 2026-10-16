@@ -6,6 +6,7 @@ from application.algorithms.astar import AStar
 from application.algorithms.base import BaseAlgorithm
 from application.algorithms.bellman_ford import BellmanFord
 from application.algorithms.bipartite_check import BipartiteCheck
+from application.algorithms.bipartite_matching import BipartiteMatching
 from application.algorithms.breadth_first_search import BreadthFirstSearch
 from application.algorithms.bridges_articulations import BridgesAndArticulations
 from application.algorithms.depth_first_search import DepthFirstSearch
@@ -22,6 +23,7 @@ from application.algorithms.registry import (
 )
 from application.algorithms.tarjan_scc import TarjanSCC
 from application.algorithms.topological_sort import TopologicalSort
+from application.algorithms.traveling_salesman import TravelingSalesman
 from domain.entities.edge import Edge
 from domain.entities.graph import Graph
 from domain.entities.node import Node
@@ -145,6 +147,8 @@ def test_default_registry_contains_builtin_algorithms() -> None:
         "bridges",
         "max-flow",
         "bipartite",
+        "matching",
+        "tsp",
         "coloring",
         "toposort",
     ]
@@ -176,6 +180,8 @@ def test_default_registry_creates_each_algorithm() -> None:
     assert isinstance(registry.create("bridges", graph, 1), BridgesAndArticulations)
     assert isinstance(registry.create("max-flow", graph, 1, 3), MaxFlow)
     assert isinstance(registry.create("bipartite", graph, 1), BipartiteCheck)
+    assert isinstance(registry.create("matching", graph, 1), BipartiteMatching)
+    assert isinstance(registry.create("tsp", graph, 1), TravelingSalesman)
     assert isinstance(registry.create("coloring", graph, 1), GreedyColoring)
     assert isinstance(registry.create("toposort", graph, 1), TopologicalSort)
 
