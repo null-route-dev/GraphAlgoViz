@@ -37,15 +37,6 @@ class AlgorithmState(Enum):
 class AlgorithmPanel(QWidget):
     """Controls for selecting and running a graph algorithm.
 
-    The panel emits signals describing user intent. It does not call
-    use cases or animate anything itself — that is the main window's
-    responsibility. The panel reflects state set by the caller through
-    ``set_state`` and ``set_step_availability``.
-
-    The target node selector is shown only when the selected algorithm
-    requires a target. Which algorithms require one is read from the
-    algorithm registry.
-
     Args:
         registry: Source of available algorithm metadata.
         parent: Optional Qt parent widget.
@@ -92,8 +83,7 @@ class AlgorithmPanel(QWidget):
 
         Args:
             can_step_back: True if a previous state is available.
-            can_step_forward: True if a next state is available or
-                can still be computed.
+            can_step_forward: True if a next state is available.
         """
         self._can_step_back = can_step_back
         self._can_step_forward = can_step_forward
@@ -109,6 +99,18 @@ class AlgorithmPanel(QWidget):
         self._replace_combo_items(self._target_node_combo, node_ids)
         self._has_nodes = bool(node_ids)
         self._update_buttons()
+
+    def set_start_node(self, node_id: int) -> None:
+        """Select the given node as the start node.
+
+        If the node is not present in the combo, this is a no-op.
+
+        Args:
+            node_id: Identifier of the node to select.
+        """
+        index = self._start_node_combo.findData(node_id)
+        if index >= 0:
+            self._start_node_combo.setCurrentIndex(index)
 
     def set_info(self, text: str) -> None:
         """Show a description of the last algorithm step.
