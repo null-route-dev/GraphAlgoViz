@@ -9,7 +9,8 @@ from typing import Any
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QPoint, QTimer
+from PySide6.QtWidgets import QToolTip
 
 from domain.entities.edge import Edge
 from domain.entities.graph import Graph
@@ -38,6 +39,27 @@ class ClickEvent:
 
 
 @dataclass(frozen=True)
+class ContextEvent:
+    """A right-button press on the canvas.
+
+    Args:
+        x: Horizontal coordinate in the unit square.
+        y: Vertical coordinate in the unit square.
+        node_id: Id of the node under the cursor, or None.
+        edge: Endpoints of the edge under the cursor, or None.
+        global_x: Screen x coordinate for menu placement.
+        global_y: Screen y coordinate for menu placement.
+    """
+
+    x: float
+    y: float
+    node_id: int | None
+    edge: tuple[int, int] | None
+    global_x: int
+    global_y: int
+
+
+@dataclass(frozen=True)
 class SelectionEvent:
     """A completed rubber-band selection.
 
@@ -57,6 +79,7 @@ class SelectionEvent:
 
 
 ClickCallback = Callable[[ClickEvent], None]
+ContextCallback = Callable[[ContextEvent], None]
 SelectionCallback = Callable[[SelectionEvent], None]
 DragMoveCallback = Callable[[float, float], None]
 DragEndCallback = Callable[[], None]
@@ -115,23 +138,18 @@ class GraphCanvas(FigureCanvasQTAgg):
 
     Positions are expected in the unit square (0..1); the canvas maps
     them to its axes without knowing about pixels. The canvas does not
-    own the graph or its positions — it reads them on every draw.
+    own the graph or its positions.
 
-    Three display options affect edge rendering:
-
-    - ``set_arrow_at_middle`` moves the arrow head of directed edges
-      from the target end to the midpoint of the edge, which is
-      helpful when arrowheads are obscured by dense node clusters.
-    - ``set_bundle_parallel`` collapses groups of parallel edges into
-      a single thick line with a summary label showing the count and
-      the list of weights. Arrow direction is not shown for bundles;
-      turn off bundling to inspect individual directions.
-    - Self-loops are drawn as small circles above their node. Multiple
-      self-loops on the same node are stacked.
+    Hover tooltips appear when the cursor rests over a node or edge.
+    Right-click invokes the context callback with both data
+    coordinates and screen coordinates so the caller can place a
+    menu. Selection supports nodes and, separately, at most one edge.
 
     Args:
         parent: Optional Qt parent widget.
         on_click: Optional callback invoked on left button press.
+        on_context_menu: Optional callback invoked on right button
+            press.
         on_selection_complete: Optional callback invoked when a
             rubber-band selection finishes.
         on_drag_move: Optional callback invoked on mouse motion while
@@ -144,6 +162,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self,
         parent: object | None = None,
         on_click: ClickCallback | None = None,
+        on_context_menu: ContextCallback | None = None,
         on_selection_complete: SelectionCallback | None = None,
         on_drag_move: DragMoveCallback | None = None,
         on_drag_end: DragEndCallback | None = None,
@@ -169,6 +188,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._configure_axes()
 
         self._on_click = on_click
+        self._on_context_menu = on_context_menu
         self._on_selection_complete = on_selection_complete
         self._on_drag_move = on_drag_move
         self._on_drag_end = on_drag_end
@@ -182,6 +202,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_labels: dict[int, str] = {}
         self._last_edge_labels: dict[tuple[int, int], str] = {}
         self._last_selected_nodes: frozenset[int] = frozenset()
+        self._last_selected_edge: tuple[int, int] | None = None
 
         self._colors_start: dict[int, str] = {}
         self._colors_target: dict[int, str] = {}
@@ -197,6 +218,8 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._selection_current: tuple[float, float] | None = None
         self._selection_additive = False
         self._selecting = False
+
+        self._hover_target: tuple[int | None, tuple[int, int] | None] | None = None
 
         self.mpl_connect("button_press_event", self._handle_press)
         self.mpl_connect("motion_notify_event", self._handle_motion)
@@ -224,7 +247,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         """Enable or disable bundling of parallel edges.
 
         Args:
-            bundle: True to draw parallel edges as a single thick line.
+            bundle: True to draw parallel edges as one thick line.
         """
         if bundle == self._bundle_parallel:
             return
@@ -235,8 +258,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         """Place arrow heads of directed edges at the midpoint.
 
         Args:
-            middle: True to draw arrows at the middle, False to keep
-                them at the target end.
+            middle: True to draw arrows at the middle.
         """
         if middle == self._arrow_at_middle:
             return
@@ -251,8 +273,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         """Save the current rendering to an image file.
 
         Args:
-            path: Destination file path. The extension determines the
-                output format.
+            path: Destination file path.
             dpi: Resolution for raster formats.
 
         Raises:
@@ -282,6 +303,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         current_edge: tuple[int, int] | None = None,
         edge_labels: dict[tuple[int, int], str] | None = None,
         selected_nodes: frozenset[int] = frozenset(),
+        selected_edge: tuple[int, int] | None = None,
     ) -> None:
         """Render the graph on the canvas.
 
@@ -296,6 +318,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             current_edge: Optional edge being considered.
             edge_labels: Optional per-edge text labels.
             selected_nodes: Ids of nodes to draw as selected.
+            selected_edge: Optional edge to draw as selected.
         """
         self._last_graph = graph
         self._last_positions = dict(positions)
@@ -306,6 +329,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self._last_labels = dict(labels or {})
         self._last_edge_labels = dict(edge_labels or {})
         self._last_selected_nodes = selected_nodes
+        self._last_selected_edge = selected_edge
 
         new_targets: dict[int, str] = {}
         for node in graph.nodes():
@@ -371,6 +395,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             self._last_positions,
             self._last_highlighted_edges,
             self._last_current_edge,
+            self._last_selected_edge,
         )
         self._draw_nodes(
             self._last_graph,
@@ -409,6 +434,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         positions: dict[int, Position],
         highlighted: frozenset[tuple[int, int]],
         current_edge: tuple[int, int] | None,
+        selected_edge: tuple[int, int] | None,
     ) -> None:
         self_loops: dict[int, list[Edge]] = {}
         normal_edges: list[Edge] = []
@@ -422,14 +448,16 @@ class GraphCanvas(FigureCanvasQTAgg):
             if node_id not in positions:
                 continue
             for index, edge in enumerate(loops):
-                style = self._edge_style(edge, highlighted, current_edge)
+                color, width, linestyle = self._edge_style(
+                    edge, highlighted, current_edge, selected_edge
+                )
                 self._draw_self_loop(
                     node_id,
                     edge,
                     positions,
-                    style[0],
-                    style[1],
-                    style[2],
+                    color,
+                    width,
+                    linestyle,
                     index,
                     len(loops),
                 )
@@ -437,7 +465,14 @@ class GraphCanvas(FigureCanvasQTAgg):
         groups = _group_edges_by_endpoints(normal_edges)
         for key, edges in groups.items():
             if self._bundle_parallel and len(edges) > 1:
-                self._draw_bundle(key, edges, positions, highlighted, current_edge)
+                self._draw_bundle(
+                    key,
+                    edges,
+                    positions,
+                    highlighted,
+                    current_edge,
+                    selected_edge,
+                )
                 continue
             total = len(edges)
             for index, edge in enumerate(edges):
@@ -445,17 +480,18 @@ class GraphCanvas(FigureCanvasQTAgg):
                     continue
                 start = positions[edge.source]
                 end = positions[edge.target]
-                style = self._edge_style(edge, highlighted, current_edge)
-                rad = _effective_rad(edge, key, _arc_rad_for_index(index, total))
-                self._draw_single_edge(
-                    edge, start, end, style[0], style[1], rad, style[2]
+                color, width, linestyle = self._edge_style(
+                    edge, highlighted, current_edge, selected_edge
                 )
+                rad = _effective_rad(edge, key, _arc_rad_for_index(index, total))
+                self._draw_single_edge(edge, start, end, color, width, rad, linestyle)
 
     def _edge_style(
         self,
         edge: Edge,
         highlighted: frozenset[tuple[int, int]],
         current_edge: tuple[int, int] | None,
+        selected_edge: tuple[int, int] | None,
     ) -> tuple[str, float, str]:
         is_current = current_edge is not None and (
             (edge.source, edge.target) == current_edge
@@ -463,6 +499,11 @@ class GraphCanvas(FigureCanvasQTAgg):
         )
         if is_current:
             return COLOR_HIGHLIGHTED, 2.5, "--"
+        is_selected = (
+            selected_edge is not None and (edge.source, edge.target) == selected_edge
+        )
+        if is_selected:
+            return COLOR_SELECTED, 3.5, "-"
         is_highlighted = (edge.source, edge.target) in highlighted or (
             edge.target,
             edge.source,
@@ -622,6 +663,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         positions: dict[int, Position],
         highlighted: frozenset[tuple[int, int]],
         current_edge: tuple[int, int] | None,
+        selected_edge: tuple[int, int] | None,
     ) -> None:
         source, target = key
         if source not in positions or target not in positions:
@@ -633,6 +675,9 @@ class GraphCanvas(FigureCanvasQTAgg):
             (e.source, e.target) == current_edge or (e.target, e.source) == current_edge
             for e in edges
         )
+        any_selected = selected_edge is not None and any(
+            (e.source, e.target) == selected_edge for e in edges
+        )
         any_highlighted = any(
             (e.source, e.target) in highlighted or (e.target, e.source) in highlighted
             for e in edges
@@ -640,6 +685,9 @@ class GraphCanvas(FigureCanvasQTAgg):
         if any_current:
             color = COLOR_HIGHLIGHTED
             linestyle = "--"
+        elif any_selected:
+            color = COLOR_SELECTED
+            linestyle = "-"
         elif any_highlighted:
             color = COLOR_CURRENT
             linestyle = "-"
@@ -801,14 +849,17 @@ class GraphCanvas(FigureCanvasQTAgg):
         return COLOR_DEFAULT
 
     def _handle_press(self, event: Any) -> None:
-        """Handle a left mouse press.
+        """Handle a mouse press.
 
         Args:
             event: A matplotlib mouse event.
         """
-        if event.button != 1:
-            return
         if event.xdata is None or event.ydata is None:
+            return
+        if event.button == 3:
+            self._handle_context_press(event)
+            return
+        if event.button != 1:
             return
         x = float(event.xdata)
         y = float(event.ydata)
@@ -841,28 +892,90 @@ class GraphCanvas(FigureCanvasQTAgg):
                 )
             )
 
+    def _handle_context_press(self, event: Any) -> None:
+        x = float(event.xdata)
+        y = float(event.ydata)
+        node_id = self._find_node_at(x, y)
+        edge = None if node_id is not None else self._find_edge_at(x, y)
+        global_pos = self.mapToGlobal(QPoint(int(event.x), int(event.y)))
+        if self._on_context_menu is not None:
+            self._on_context_menu(
+                ContextEvent(
+                    x=x,
+                    y=y,
+                    node_id=node_id,
+                    edge=edge,
+                    global_x=global_pos.x(),
+                    global_y=global_pos.y(),
+                )
+            )
+
     def _handle_motion(self, event: Any) -> None:
-        """Handle mouse motion while the left button is held down.
+        """Handle mouse motion.
 
         Args:
             event: A matplotlib mouse event.
         """
-        if event.button != 1:
-            return
         if event.xdata is None or event.ydata is None:
             return
         x = float(event.xdata)
         y = float(event.ydata)
 
-        if self._pressed_node is not None:
+        if event.button == 1 and self._pressed_node is not None:
             if self._on_drag_move is not None:
                 self._on_drag_move(x, y)
             return
 
-        if self._selection_start is not None:
+        if event.button == 1 and self._selection_start is not None:
             self._selection_current = (x, y)
             self._selecting = True
             self._redraw()
+            return
+
+        if event.button is None:
+            self._handle_hover(event, x, y)
+
+    def _handle_hover(self, event: Any, x: float, y: float) -> None:
+        node_id = self._find_node_at(x, y)
+        edge = None if node_id is not None else self._find_edge_at(x, y)
+        target = (node_id, edge)
+        if target == self._hover_target:
+            return
+        self._hover_target = target
+        text = self._build_tooltip(node_id, edge)
+        if text is None:
+            QToolTip.hideText()
+            return
+        global_pos = self.mapToGlobal(QPoint(int(event.x), int(event.y)))
+        QToolTip.showText(global_pos, text, self)
+
+    def _build_tooltip(
+        self,
+        node_id: int | None,
+        edge: tuple[int, int] | None,
+    ) -> str | None:
+        if self._last_graph is None:
+            return None
+        if node_id is not None:
+            if not self._last_graph.has_node(node_id):
+                return None
+            node = self._last_graph.node(node_id)
+            degree = len(self._last_graph.neighbors(node_id))
+            lines = [f"Node {node_id}"]
+            if node.label:
+                lines.append(f"Label: {node.label}")
+            lines.append(f"Degree: {degree}")
+            return "\n".join(lines)
+        if edge is not None:
+            source, target = edge
+            for candidate in self._last_graph.edges():
+                if candidate.source == source and candidate.target == target:
+                    arrow = "\u2192" if candidate.directed else "\u2014"
+                    return (
+                        f"Edge {source} {arrow} {target}\nWeight: {candidate.weight:g}"
+                    )
+            return None
+        return None
 
     def _handle_release(self, event: Any) -> None:
         """Handle the release of the left mouse button.

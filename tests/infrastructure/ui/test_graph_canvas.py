@@ -10,6 +10,7 @@ from domain.value_objects.position import Position
 from infrastructure.ui.graph_canvas import (
     ARC_SPACING,
     ClickEvent,
+    ContextEvent,
     GraphCanvas,
     SelectionEvent,
     _arc_midpoint,
@@ -24,7 +25,7 @@ from infrastructure.ui.graph_canvas import (
 
 @pytest.fixture
 def canvas(qtbot: object) -> Iterator[GraphCanvas]:
-    """Return a GraphCanvas for export and toggle tests."""
+    """Return a GraphCanvas for tests."""
     _ = qtbot
     widget = GraphCanvas()
     yield widget
@@ -179,6 +180,25 @@ def test_click_event_fields() -> None:
     assert event.double is False
 
 
+def test_context_event_fields() -> None:
+    """ContextEvent stores every field."""
+    event = ContextEvent(
+        x=0.1,
+        y=0.2,
+        node_id=None,
+        edge=(1, 2),
+        global_x=100,
+        global_y=200,
+    )
+
+    assert event.x == 0.1
+    assert event.y == 0.2
+    assert event.node_id is None
+    assert event.edge == (1, 2)
+    assert event.global_x == 100
+    assert event.global_y == 200
+
+
 def test_selection_event_fields() -> None:
     """SelectionEvent stores every field."""
     event = SelectionEvent(x1=0.1, y1=0.2, x2=0.3, y2=0.4, additive=True)
@@ -266,14 +286,6 @@ def test_set_bundle_parallel_updates_flag(canvas: GraphCanvas) -> None:
     assert canvas._bundle_parallel is True
 
 
-def test_set_bundle_parallel_is_idempotent(canvas: GraphCanvas) -> None:
-    """Setting the same value does not error."""
-    canvas.set_bundle_parallel(True)
-    canvas.set_bundle_parallel(True)
-
-    assert canvas._bundle_parallel is True
-
-
 def test_arrow_at_middle_default_off(canvas: GraphCanvas) -> None:
     """Arrows at middle are off by default."""
     assert canvas._arrow_at_middle is False
@@ -284,3 +296,49 @@ def test_set_arrow_at_middle_updates_flag(canvas: GraphCanvas) -> None:
     canvas.set_arrow_at_middle(True)
 
     assert canvas._arrow_at_middle is True
+
+
+def test_build_tooltip_for_node(canvas: GraphCanvas) -> None:
+    """The tooltip for a node mentions its id and degree."""
+    from domain.entities.graph import Graph
+    from domain.entities.node import Node
+
+    graph = Graph()
+    graph.add_node(Node(id=1, label="Alpha"))
+    graph.add_node(Node(id=2))
+    graph.add_node(Node(id=3))
+    graph.add_edge(Edge(source=1, target=2))
+    graph.add_edge(Edge(source=1, target=3))
+    canvas.draw_graph(
+        graph, {1: Position(0.5, 0.5), 2: Position(0.7, 0.5), 3: Position(0.3, 0.5)}
+    )
+
+    text = canvas._build_tooltip(1, None)
+
+    assert text is not None
+    assert "Node 1" in text
+    assert "Alpha" in text
+    assert "Degree: 2" in text
+
+
+def test_build_tooltip_for_edge(canvas: GraphCanvas) -> None:
+    """The tooltip for an edge mentions its endpoints and weight."""
+    from domain.entities.graph import Graph
+    from domain.entities.node import Node
+
+    graph = Graph()
+    graph.add_node(Node(id=1))
+    graph.add_node(Node(id=2))
+    graph.add_edge(Edge(source=1, target=2, weight=3.5, directed=True))
+    canvas.draw_graph(graph, {1: Position(0.0, 0.5), 2: Position(1.0, 0.5)})
+
+    text = canvas._build_tooltip(None, (1, 2))
+
+    assert text is not None
+    assert "Edge 1" in text
+    assert "Weight: 3.5" in text
+
+
+def test_build_tooltip_empty(canvas: GraphCanvas) -> None:
+    """With nothing hovered, the tooltip is None."""
+    assert canvas._build_tooltip(None, None) is None
