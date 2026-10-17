@@ -468,3 +468,57 @@ def test_context_menu_on_node_does_not_raise(window: MainWindow) -> None:
         global_y=0,
     )
     assert event.node_id == 1
+
+
+def test_load_example_replaces_graph(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Loading an example replaces the entire graph."""
+    window._handle_add_node(0.5, 0.5)
+    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+
+    window._handle_load_example("k5")
+
+    assert window._stats_label.text() == "Nodes: 5   Edges: 10"
+
+
+def test_load_example_resets_history_to_clean(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Loading an example resets history and clears the dirty flag."""
+    window._handle_add_node(0.5, 0.5)
+    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+
+    window._handle_load_example("k33")
+
+    assert window._history.is_dirty() is False
+    assert window._undo_action is not None
+    assert window._undo_action.isEnabled() is False
+
+
+def test_load_example_sets_positions(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Loading an example sets positions for every node."""
+    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+
+    window._handle_load_example("cycle")
+
+    assert len(window._positions) == 6
+    for node_id in range(1, 7):
+        assert node_id in window._positions
+
+
+def test_load_example_updates_title(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Loading an example clears the current file path from the title."""
+    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+
+    window._handle_load_example("tree")
+
+    assert "*" not in window.windowTitle()

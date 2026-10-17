@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from application.algorithms.registry import AlgorithmRegistry
 from application.algorithms.step_result import StepResult
+from application.examples import all_examples, find_example
 from application.history import EditHistory, GraphState, snapshot
 from application.project_storage import ProjectStorage, ProjectStorageError
 from application.services.layout_service import LayoutService
@@ -346,6 +347,15 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(select_all_action)
 
         self._view_menu = self.menuBar().addMenu("&View")
+
+        examples_menu = self.menuBar().addMenu("E&xamples")
+        for example in all_examples():
+            action = QAction(example.display_name, self)
+            action.setToolTip(example.description)
+            action.triggered.connect(
+                lambda checked=False, eid=example.id: self._handle_load_example(eid)
+            )
+            examples_menu.addAction(action)
 
         help_menu = self.menuBar().addMenu("&Help")
 
@@ -702,6 +712,34 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export failed", str(exc))
             return
         self._show_temporary_message(f"Exported to {path.name}")
+
+    def _handle_load_example(self, example_id: str) -> None:
+        """Replace the current project with a pre-built example.
+
+        Args:
+            example_id: Stable identifier of the example to load.
+        """
+        if not self._confirm_discard_changes():
+            return
+        example = find_example(example_id)
+        graph, positions = example.build()
+        self._repository.save(graph)
+        self._positions = positions
+        self._current_path = None
+        self._pending_edge_source = None
+        self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
+        self._selected_edge = None
+        self._drag_changed = False
+        self._reset_algorithm()
+        self._history.reset(snapshot(self._repository.get(), self._positions))
+        self._sync_available_nodes()
+        self._refresh_canvas()
+        self._update_graph_stats()
+        self._refresh_action_states()
+        self._update_window_title()
+        self._show_temporary_message(f"Loaded example: {example.display_name}")
 
     def _handle_copy(self) -> None:
         """Copy the selected nodes and their internal edges."""
