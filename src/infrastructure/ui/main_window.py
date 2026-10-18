@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from application.algorithms.registry import AlgorithmRegistry
 from application.algorithms.step_result import StepResult
 from application.examples import all_examples, find_example
+from application.generators import generate
 from application.history import EditHistory, GraphState, snapshot
 from application.project_storage import ProjectStorage, ProjectStorageError
 from application.services.layout_service import LayoutService
@@ -37,6 +38,9 @@ from infrastructure.settings import AppSettings
 from infrastructure.ui.algorithm_panel import AlgorithmPanel, AlgorithmState
 from infrastructure.ui.dialogs.edge_attributes_dialog import (
     EdgeAttributesDialog,
+)
+from infrastructure.ui.dialogs.generate_graph_dialog import (
+    GenerateGraphDialog,
 )
 from infrastructure.ui.dialogs.node_attributes_dialog import (
     NodeAttributesDialog,
@@ -281,6 +285,10 @@ class MainWindow(QMainWindow):
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self._handle_open_project)
         file_menu.addAction(open_action)
+
+        generate_action = QAction("&Generate Graph...", self)
+        generate_action.triggered.connect(self._handle_generate_graph)
+        file_menu.addAction(generate_action)
 
         file_menu.addSeparator()
 
@@ -740,6 +748,38 @@ class MainWindow(QMainWindow):
         self._refresh_action_states()
         self._update_window_title()
         self._show_temporary_message(f"Loaded example: {example.display_name}")
+
+    def _handle_generate_graph(self) -> None:
+        """Generate a random graph and replace the current project."""
+        request = GenerateGraphDialog.get_request(parent=self)
+        if request is None:
+            return
+        try:
+            graph = generate(request)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Generate failed", str(exc))
+            return
+        if not self._confirm_discard_changes():
+            return
+        self._repository.save(graph)
+        self._positions = self._layout_service.circular(graph)
+        self._current_path = None
+        self._pending_edge_source = None
+        self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
+        self._selected_edge = None
+        self._drag_changed = False
+        self._reset_algorithm()
+        self._history.reset(snapshot(self._repository.get(), self._positions))
+        self._sync_available_nodes()
+        self._refresh_canvas()
+        self._update_graph_stats()
+        self._refresh_action_states()
+        self._update_window_title()
+        self._show_temporary_message(
+            f"Generated: {graph.node_count} nodes, {graph.edge_count} edges"
+        )
 
     def _handle_copy(self) -> None:
         """Copy the selected nodes and their internal edges."""

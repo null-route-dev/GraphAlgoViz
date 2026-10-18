@@ -522,3 +522,31 @@ def test_load_example_updates_title(
     window._handle_load_example("tree")
 
     assert "*" not in window.windowTitle()
+
+
+def test_generate_graph_populates_graph(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Generate Graph handler fills the graph from a request."""
+    from application.generators import GeneratorKind, GeneratorRequest
+    from infrastructure.ui.dialogs.generate_graph_dialog import (
+        GenerateGraphDialog,
+    )
+
+    request = GeneratorRequest(
+        kind=GeneratorKind.ERDOS_RENYI,
+        node_count=10,
+        probability=0.5,
+        seed=42,
+    )
+    monkeypatch.setattr(
+        GenerateGraphDialog,
+        "get_request",
+        staticmethod(lambda parent=None: request),
+    )
+    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+
+    window._handle_generate_graph()
+
+    assert window._repository.get().node_count == 10
