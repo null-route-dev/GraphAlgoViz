@@ -23,6 +23,7 @@ from application.generators import generate
 from application.history import EditHistory, GraphState, snapshot
 from application.project_storage import ProjectStorage, ProjectStorageError
 from application.services.layout_service import LayoutService
+from application.statistics import compute_statistics
 from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
@@ -45,6 +46,7 @@ from infrastructure.ui.dialogs.generate_graph_dialog import (
 from infrastructure.ui.dialogs.node_attributes_dialog import (
     NodeAttributesDialog,
 )
+from infrastructure.ui.dialogs.statistics_dialog import StatisticsDialog
 from infrastructure.ui.graph_canvas import (
     ClickEvent,
     ContextEvent,
@@ -452,9 +454,14 @@ class MainWindow(QMainWindow):
             self._view_menu.addAction(self._matrix_dock.toggleViewAction())
 
     def _add_theme_action(self) -> None:
-        """Add theme and display toggles to the View menu."""
+        """Add statistics and display toggles to the View menu."""
         if self._view_menu is None:
             return
+
+        statistics_action = QAction("Statistics...", self)
+        statistics_action.triggered.connect(self._handle_statistics)
+        self._view_menu.addAction(statistics_action)
+
         self._view_menu.addSeparator()
 
         self._snap_action = QAction("Snap to grid", self)
@@ -525,6 +532,11 @@ class MainWindow(QMainWindow):
         self._arrow_at_middle = checked
         self._settings.set_arrow_at_middle(checked)
         self._canvas.set_arrow_at_middle(checked)
+
+    def _handle_statistics(self) -> None:
+        """Compute graph statistics and show them in a dialog."""
+        stats = compute_statistics(self._repository.get())
+        StatisticsDialog.show_stats(stats, self)
 
     def _restore_mode_message(self) -> None:
         """Show the current mode in the status bar."""
