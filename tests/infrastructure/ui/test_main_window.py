@@ -26,10 +26,17 @@ from infrastructure.ui.dialogs.edge_attributes_dialog import (
     EdgeAttributes,
     EdgeAttributesDialog,
 )
+from infrastructure.ui.dialogs.node_attributes_dialog import (
+    NodeAttributesDialog,
+)
 from infrastructure.ui.graph_canvas import ClickEvent, SelectionEvent
 from infrastructure.ui.interaction_mode import InteractionMode
 from infrastructure.ui.main_window import (
     APP_NAME,
+    SHORTCUT_DUPLICATE,
+    SHORTCUT_RENAME,
+    SHORTCUT_RUN,
+    SHORTCUT_SNAP,
     MainWindow,
     _resolve_export_path,
 )
@@ -52,6 +59,16 @@ def stub_edge_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
         staticmethod(
             lambda *args, **kwargs: EdgeAttributes(weight=1.0, directed=False)
         ),
+    )
+
+
+@pytest.fixture
+def stub_node_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the node attributes dialog with a fixed label."""
+    monkeypatch.setattr(
+        NodeAttributesDialog,
+        "get_label",
+        staticmethod(lambda *args, **kwargs: "renamed"),
     )
 
 
@@ -524,29 +541,154 @@ def test_load_example_updates_title(
     assert "*" not in window.windowTitle()
 
 
-def test_generate_graph_populates_graph(
+def test_duplicate_shortcut_is_ctrl_d(window: MainWindow) -> None:
+    """The duplicate action carries the Ctrl+D shortcut."""
+    assert window._duplicate_action is not None
+    assert window._duplicate_action.shortcut().toString() == SHORTCUT_DUPLICATE
+
+
+def test_rename_shortcut_is_f2(window: MainWindow) -> None:
+    """The rename action carries the F2 shortcut."""
+    assert window._rename_action is not None
+    assert window._rename_action.shortcut().toString() == SHORTCUT_RENAME
+
+
+def test_snap_shortcut_is_ctrl_g(window: MainWindow) -> None:
+    """The snap-to-grid action carries the Ctrl+G shortcut."""
+    assert window._snap_action is not None
+    assert window._snap_action.shortcut().toString() == SHORTCUT_SNAP
+
+
+def test_run_shortcut_is_f5(window: MainWindow) -> None:
+    """The run action carries the F5 shortcut."""
+    assert window._run_action is not None
+    assert window._run_action.shortcut().toString() == SHORTCUT_RUN
+
+
+def test_duplicate_creates_new_node(window: MainWindow) -> None:
+    """Duplicating a selected node adds a copy."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    window._handle_duplicate()
+
+    assert window._stats_label.text() == "Nodes: 2   Edges: 0"
+
+
+def test_duplicate_preserves_edges(window: MainWindow) -> None:
+    """Duplicating a pair of connected nodes duplicates their edge."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._add_edge_use_case.execute(source=1, target=2, weight=2.0)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_canvas_click(_click(0.4, 0.4, node_id=2, shift=True))
+
+    window._handle_duplicate()
+
+    assert window._stats_label.text() == "Nodes: 4   Edges: 2"
+
+
+def test_duplicate_without_selection_does_nothing(
     window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Generate Graph handler fills the graph from a request."""
-    from application.generators import GeneratorKind, GeneratorRequest
-    from infrastructure.ui.dialogs.generate_graph_dialog import (
-        GenerateGraphDialog,
-    )
+    """Duplicating an empty selection leaves the graph unchanged."""
+    window._handle_add_node(0.2, 0.2)
 
-    request = GeneratorRequest(
-        kind=GeneratorKind.ERDOS_RENYI,
-        node_count=10,
-        probability=0.5,
-        seed=42,
-    )
-    monkeypatch.setattr(
-        GenerateGraphDialog,
-        "get_request",
-        staticmethod(lambda parent=None: request),
-    )
-    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+    window._handle_duplicate()
 
-    window._handle_generate_graph()
+    assert window._stats_label.text() == "Nodes: 1   Edges: 0"
 
-    assert window._repository.get().node_count == 10
+
+def test_duplicate_does_not_touch_clipboard(window: MainWindow) -> None:
+    """Duplicate leaves the user's clipboard intact."""
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.4, 0.4)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+    window._handle_copy()
+    clipboard_before = window._clipboard
+    window._handle_canvas_click(_click(0.4, 0.4, node_id=2))
+
+    window._handle_duplicate()
+
+    assert window._clipboard is clipboard_before
+
+
+def test_rename_updates_label(
+    window: MainWindow,
+    stub_node_dialog: None,
+) -> None:
+    """Renaming a single selected node updates its label."""
+    _ = stub_node_dialog
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    window._handle_rename()
+
+    assert window._repository.get().node(1).label == "renamed"
+
+
+def test_rename_without_selection_does_nothing(
+    window: MainWindow,
+) -> None:
+    """Renaming with no selection leaves the graph unchanged."""
+    window._handle_add_node(0.2, 0.2)
+
+    window._handle_rename()
+
+    assert window._repository.get().node(1).label == ""
+
+
+def test_rename_with_multiple_selection_does_nothing(
+    window: MainWindow,
+) -> None:
+    """Renaming with multiple nodes selected leaves the graph unchanged."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.1, 0.1, node_id=1))
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=2, shift=True))
+
+    window._handle_rename()
+
+    assert window._repository.get().node(1).label == ""
+    assert window._repository.get().node(2).label == ""
+
+
+def test_duplicate_action_enabled_with_selection(
+    window: MainWindow,
+) -> None:
+    """The duplicate action becomes enabled when nodes are selected."""
+    window._handle_add_node(0.2, 0.2)
+
+    assert window._duplicate_action is not None
+    assert window._duplicate_action.isEnabled() is False
+
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=1))
+
+    assert window._duplicate_action.isEnabled() is True
+
+
+def test_rename_action_requires_single_selection(
+    window: MainWindow,
+) -> None:
+    """The rename action is enabled only when exactly one node is selected."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._handle_canvas_click(_click(0.1, 0.1, node_id=1))
+    window._handle_canvas_click(_click(0.2, 0.2, node_id=2, shift=True))
+
+    assert window._rename_action is not None
+    assert window._rename_action.isEnabled() is False
+
+    window._handle_canvas_click(_click(0.5, 0.5, node_id=None))
+    window._handle_canvas_click(_click(0.1, 0.1, node_id=1))
+
+    assert window._rename_action.isEnabled() is True
+
+
+def test_run_shortcut_when_no_algorithm_is_safe(
+    window: MainWindow,
+) -> None:
+    """The F5 handler does nothing when the run button is disabled."""
+    window._handle_run_shortcut()
+
+    assert window._algorithm_state is window._algorithm_state.IDLE

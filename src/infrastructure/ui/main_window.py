@@ -103,6 +103,11 @@ MODE_SHORTCUTS: dict[InteractionMode, str] = {
     InteractionMode.DELETE: "4",
 }
 
+SHORTCUT_DUPLICATE = "Ctrl+D"
+SHORTCUT_RENAME = "F2"
+SHORTCUT_SNAP = "Ctrl+G"
+SHORTCUT_RUN = "F5"
+
 
 def _snap(value: float) -> float:
     """Round a coordinate to the nearest grid point.
@@ -219,6 +224,9 @@ class MainWindow(QMainWindow):
         self._copy_action: QAction | None = None
         self._paste_action: QAction | None = None
         self._delete_action: QAction | None = None
+        self._duplicate_action: QAction | None = None
+        self._rename_action: QAction | None = None
+        self._run_action: QAction | None = None
         self._snap_action: QAction | None = None
         self._bundle_action: QAction | None = None
         self._arrow_action: QAction | None = None
@@ -342,6 +350,16 @@ class MainWindow(QMainWindow):
         self._paste_action.triggered.connect(self._handle_paste)
         edit_menu.addAction(self._paste_action)
 
+        self._duplicate_action = QAction("D&uplicate", self)
+        self._duplicate_action.setShortcut(QKeySequence(SHORTCUT_DUPLICATE))
+        self._duplicate_action.triggered.connect(self._handle_duplicate)
+        edit_menu.addAction(self._duplicate_action)
+
+        self._rename_action = QAction("&Rename", self)
+        self._rename_action.setShortcut(QKeySequence(SHORTCUT_RENAME))
+        self._rename_action.triggered.connect(self._handle_rename)
+        edit_menu.addAction(self._rename_action)
+
         edit_menu.addSeparator()
 
         self._delete_action = QAction("&Delete Selected", self)
@@ -355,6 +373,13 @@ class MainWindow(QMainWindow):
         select_all_action.setShortcut(QKeySequence.StandardKey.SelectAll)
         select_all_action.triggered.connect(self._handle_select_all)
         edit_menu.addAction(select_all_action)
+
+        edit_menu.addSeparator()
+
+        self._run_action = QAction("R&un algorithm", self)
+        self._run_action.setShortcut(QKeySequence(SHORTCUT_RUN))
+        self._run_action.triggered.connect(self._handle_run_shortcut)
+        edit_menu.addAction(self._run_action)
 
         self._view_menu = self.menuBar().addMenu("&View")
 
@@ -467,6 +492,7 @@ class MainWindow(QMainWindow):
         self._snap_action = QAction("Snap to grid", self)
         self._snap_action.setCheckable(True)
         self._snap_action.setChecked(self._snap_to_grid)
+        self._snap_action.setShortcut(QKeySequence(SHORTCUT_SNAP))
         self._snap_action.triggered.connect(self._handle_toggle_snap)
         self._view_menu.addAction(self._snap_action)
 
@@ -565,6 +591,7 @@ class MainWindow(QMainWindow):
     def _refresh_action_states(self) -> None:
         """Update the enabled state of the Edit menu actions."""
         has_selection = bool(self._selected_nodes) or (self._selected_edge is not None)
+        single_node = len(self._selected_nodes) == 1
         if self._undo_action is not None:
             self._undo_action.setEnabled(
                 self._editing_enabled and self._history.can_undo()
@@ -583,6 +610,12 @@ class MainWindow(QMainWindow):
             )
         if self._delete_action is not None:
             self._delete_action.setEnabled(self._editing_enabled and has_selection)
+        if self._duplicate_action is not None:
+            self._duplicate_action.setEnabled(
+                self._editing_enabled and bool(self._selected_nodes)
+            )
+        if self._rename_action is not None:
+            self._rename_action.setEnabled(self._editing_enabled and single_node)
 
     def _sync_available_nodes(self) -> None:
         """Update the panel's node lists from the current graph."""
@@ -816,8 +849,59 @@ class MainWindow(QMainWindow):
         if self._clipboard is None:
             return
         nodes, edges = self._clipboard
-        if not nodes:
+        new_ids = self._paste_selection(nodes, edges)
+        self._show_temporary_message(f"Pasted {len(new_ids)} node(s)")
+
+    def _handle_duplicate(self) -> None:
+        """Duplicate the selected nodes in place.
+
+        The clipboard is not touched, so the user's previous copy
+        remains available.
+        """
+        if not self._selected_nodes:
             return
+        graph = self._repository.get()
+        nodes = [graph.node(nid) for nid in self._selected_nodes if graph.has_node(nid)]
+        node_ids = {node.id for node in nodes}
+        edges = [
+            edge
+            for edge in graph.edges()
+            if edge.source in node_ids and edge.target in node_ids
+        ]
+        new_ids = self._paste_selection(nodes, edges)
+        self._show_temporary_message(f"Duplicated {len(new_ids)} node(s)")
+
+    def _handle_rename(self) -> None:
+        """Open the rename dialog for the single selected node."""
+        if len(self._selected_nodes) != 1:
+            return
+        node_id = next(iter(self._selected_nodes))
+        self._handle_edit_node(node_id)
+
+    def _handle_run_shortcut(self) -> None:
+        """Trigger the algorithm panel's Run button."""
+        if not self._panel._run_button.isEnabled():
+            self._show_temporary_message("Run is not available")
+            return
+        self._panel._run_button.click()
+
+    def _paste_selection(
+        self,
+        nodes: list[Node],
+        edges: list[Edge],
+    ) -> list[int]:
+        """Create copies of the given nodes and edges in the graph.
+
+        Args:
+            nodes: The nodes to copy.
+            edges: The edges to copy. Both endpoints must be in
+                ``nodes``.
+
+        Returns:
+            The list of new node ids, in the same order as ``nodes``.
+        """
+        if not nodes:
+            return []
         graph = self._repository.get()
         id_map: dict[int, int] = {}
         new_ids: list[int] = []
@@ -846,7 +930,7 @@ class MainWindow(QMainWindow):
         self._sync_available_nodes()
         self._update_graph_stats()
         self._refresh_canvas()
-        self._show_temporary_message(f"Pasted {len(new_ids)} node(s)")
+        return new_ids
 
     def _handle_select_all(self) -> None:
         """Select every node in the graph."""
