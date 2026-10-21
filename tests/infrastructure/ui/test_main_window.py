@@ -692,3 +692,51 @@ def test_run_shortcut_when_no_algorithm_is_safe(
     window._handle_run_shortcut()
 
     assert window._algorithm_state is window._algorithm_state.IDLE
+
+
+def test_export_csv_writes_file(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The Export CSV handler writes the current graph to a file."""
+    from PySide6.QtWidgets import QFileDialog
+
+    path = tmp_path / "out.csv"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *args, **kwargs: (str(path), "")),
+    )
+    window._handle_add_node(0.5, 0.5)
+
+    window._handle_export_csv()
+
+    assert path.exists()
+    content = path.read_text(encoding="utf-8")
+    assert "source,target,weight,directed" in content
+
+
+def test_import_csv_replaces_graph(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The Import CSV handler replaces the graph with the file contents."""
+    from PySide6.QtWidgets import QFileDialog
+
+    path = tmp_path / "in.csv"
+    path.write_text(
+        "source,target,weight,directed\n1,2,1.0,false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *args, **kwargs: (str(path), "")),
+    )
+    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
+
+    window._handle_import_csv()
+
+    assert window._stats_label.text() == "Nodes: 2   Edges: 1"

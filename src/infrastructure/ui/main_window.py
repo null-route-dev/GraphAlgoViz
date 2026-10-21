@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 
 from application.algorithms.registry import AlgorithmRegistry
 from application.algorithms.step_result import StepResult
+from application.csv_export import export_csv
+from application.csv_import import CsvFormatError, import_csv
 from application.examples import all_examples, find_example
 from application.generators import generate
 from application.history import EditHistory, GraphState, snapshot
@@ -64,6 +66,9 @@ BASE_INTERVAL_MS = 1000
 
 PROJECT_FILTER = "GraphAlgoViz project (*.gaviz);;All files (*)"
 PROJECT_SUFFIX = ".gaviz"
+
+CSV_FILTER = "CSV file (*.csv);;All files (*)"
+CSV_SUFFIX = ".csv"
 
 EXPORT_FILTER = (
     "PNG image (*.png);;"
@@ -133,6 +138,20 @@ def _resolve_export_path(path: Path) -> Path:
     if path.suffix.lower() in EXPORT_EXTENSIONS:
         return path
     return path.with_suffix(DEFAULT_EXPORT_SUFFIX)
+
+
+def _ensure_csv_suffix(path: Path) -> Path:
+    """Append the .csv suffix when it is missing.
+
+    Args:
+        path: The path chosen by the user.
+
+    Returns:
+        The path, with .csv appended if it did not have it.
+    """
+    if path.suffix.lower() == CSV_SUFFIX:
+        return path
+    return path.with_suffix(CSV_SUFFIX)
 
 
 ClipboardData = tuple[list[Node], list[Edge]]
@@ -296,6 +315,10 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._handle_open_project)
         file_menu.addAction(open_action)
 
+        import_csv_action = QAction("&Import CSV...", self)
+        import_csv_action.triggered.connect(self._handle_import_csv)
+        file_menu.addAction(import_csv_action)
+
         generate_action = QAction("&Generate Graph...", self)
         generate_action.triggered.connect(self._handle_generate_graph)
         file_menu.addAction(generate_action)
@@ -318,6 +341,10 @@ class MainWindow(QMainWindow):
         export_action.setShortcut(QKeySequence("Ctrl+E"))
         export_action.triggered.connect(self._handle_export_image)
         file_menu.addAction(export_action)
+
+        export_csv_action = QAction("Export &CSV...", self)
+        export_csv_action.triggered.connect(self._handle_export_csv)
+        file_menu.addAction(export_csv_action)
 
         file_menu.addSeparator()
 
@@ -765,6 +792,52 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export failed", str(exc))
             return
         self._show_temporary_message(f"Exported to {path.name}")
+
+    def _handle_export_csv(self) -> None:
+        """Prompt for a destination and save the graph as CSV."""
+        path_str, _ = QFileDialog.getSaveFileName(self, "Export CSV", "", CSV_FILTER)
+        if not path_str:
+            return
+        path = _ensure_csv_suffix(Path(path_str))
+        try:
+            export_csv(self._repository.get(), path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self._show_temporary_message(f"Exported to {path.name}")
+
+    def _handle_import_csv(self) -> None:
+        """Prompt for a file and replace the graph with its contents."""
+        path_str, _ = QFileDialog.getOpenFileName(self, "Import CSV", "", CSV_FILTER)
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            graph = import_csv(path)
+        except (OSError, CsvFormatError) as exc:
+            QMessageBox.warning(self, "Import failed", str(exc))
+            return
+        if not self._confirm_discard_changes():
+            return
+        self._repository.save(graph)
+        self._positions = self._layout_service.circular(graph)
+        self._current_path = None
+        self._pending_edge_source = None
+        self._drag_node = None
+        self._drag_click = None
+        self._selected_nodes.clear()
+        self._selected_edge = None
+        self._drag_changed = False
+        self._reset_algorithm()
+        self._history.reset(snapshot(self._repository.get(), self._positions))
+        self._sync_available_nodes()
+        self._refresh_canvas()
+        self._update_graph_stats()
+        self._refresh_action_states()
+        self._update_window_title()
+        self._show_temporary_message(
+            f"Imported: {graph.node_count} nodes, {graph.edge_count} edges"
+        )
 
     def _handle_load_example(self, example_id: str) -> None:
         """Replace the current project with a pre-built example.
