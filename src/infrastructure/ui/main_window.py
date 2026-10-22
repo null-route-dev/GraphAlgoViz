@@ -20,6 +20,7 @@ from application.algorithms.registry import AlgorithmRegistry
 from application.algorithms.step_result import StepResult
 from application.csv_export import export_csv
 from application.csv_import import CsvFormatError, import_csv
+from application.dot_export import export_dot
 from application.examples import all_examples, find_example
 from application.generators import generate
 from application.history import EditHistory, GraphState, snapshot
@@ -69,6 +70,9 @@ PROJECT_SUFFIX = ".gaviz"
 
 CSV_FILTER = "CSV file (*.csv);;All files (*)"
 CSV_SUFFIX = ".csv"
+
+DOT_FILTER = "Graphviz DOT file (*.dot);;All files (*)"
+DOT_SUFFIX = ".dot"
 
 EXPORT_FILTER = (
     "PNG image (*.png);;"
@@ -152,6 +156,20 @@ def _ensure_csv_suffix(path: Path) -> Path:
     if path.suffix.lower() == CSV_SUFFIX:
         return path
     return path.with_suffix(CSV_SUFFIX)
+
+
+def _ensure_dot_suffix(path: Path) -> Path:
+    """Append the .dot suffix when it is missing.
+
+    Args:
+        path: The path chosen by the user.
+
+    Returns:
+        The path, with .dot appended if it did not have it.
+    """
+    if path.suffix.lower() == DOT_SUFFIX:
+        return path
+    return path.with_suffix(DOT_SUFFIX)
 
 
 ClipboardData = tuple[list[Node], list[Edge]]
@@ -345,6 +363,10 @@ class MainWindow(QMainWindow):
         export_csv_action = QAction("Export &CSV...", self)
         export_csv_action.triggered.connect(self._handle_export_csv)
         file_menu.addAction(export_csv_action)
+
+        export_dot_action = QAction("Export &DOT...", self)
+        export_dot_action.triggered.connect(self._handle_export_dot)
+        file_menu.addAction(export_dot_action)
 
         file_menu.addSeparator()
 
@@ -801,6 +823,19 @@ class MainWindow(QMainWindow):
         path = _ensure_csv_suffix(Path(path_str))
         try:
             export_csv(self._repository.get(), path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self._show_temporary_message(f"Exported to {path.name}")
+
+    def _handle_export_dot(self) -> None:
+        """Prompt for a destination and save the graph as DOT."""
+        path_str, _ = QFileDialog.getSaveFileName(self, "Export DOT", "", DOT_FILTER)
+        if not path_str:
+            return
+        path = _ensure_dot_suffix(Path(path_str))
+        try:
+            export_dot(self._repository.get(), path)
         except OSError as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
             return
