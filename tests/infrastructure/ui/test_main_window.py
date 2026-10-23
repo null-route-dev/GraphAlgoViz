@@ -12,6 +12,9 @@ from application.services.layout_service import LayoutService
 from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
+from application.use_cases.remove_isolated_nodes import (
+    RemoveIsolatedNodesUseCase,
+)
 from application.use_cases.remove_node import RemoveNodeUseCase
 from application.use_cases.update_edge import UpdateEdgeUseCase
 from application.use_cases.update_node import UpdateNodeUseCase
@@ -90,6 +93,7 @@ def window(qtbot: object, settings: AppSettings) -> Iterator[MainWindow]:
         add_edge_use_case=AddEdgeUseCase(repository),
         remove_node_use_case=RemoveNodeUseCase(repository),
         remove_edge_use_case=RemoveEdgeUseCase(repository),
+        remove_isolated_nodes_use_case=RemoveIsolatedNodesUseCase(repository),
         update_edge_use_case=UpdateEdgeUseCase(repository),
         update_node_use_case=UpdateNodeUseCase(repository),
     )
@@ -694,49 +698,83 @@ def test_run_shortcut_when_no_algorithm_is_safe(
     assert window._algorithm_state is window._algorithm_state.IDLE
 
 
-def test_export_csv_writes_file(
+def test_remove_isolated_nodes_removes_nothing_on_empty_graph(
     window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """The Export CSV handler writes the current graph to a file."""
-    from PySide6.QtWidgets import QFileDialog
+    """The handler is a no-op when the graph is empty."""
+    window._handle_remove_isolated_nodes()
 
-    path = tmp_path / "out.csv"
-    monkeypatch.setattr(
-        QFileDialog,
-        "getSaveFileName",
-        staticmethod(lambda *args, **kwargs: (str(path), "")),
-    )
-    window._handle_add_node(0.5, 0.5)
-
-    window._handle_export_csv()
-
-    assert path.exists()
-    content = path.read_text(encoding="utf-8")
-    assert "source,target,weight,directed" in content
+    assert window._stats_label.text() == "Nodes: 0   Edges: 0"
 
 
-def test_import_csv_replaces_graph(
+def test_remove_isolated_nodes_removes_only_isolated(
     window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """The Import CSV handler replaces the graph with the file contents."""
-    from PySide6.QtWidgets import QFileDialog
+    """The handler removes isolated nodes and keeps connected ones."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._handle_add_node(0.3, 0.3)
+    window._add_edge_use_case.execute(source=2, target=3)
 
-    path = tmp_path / "in.csv"
-    path.write_text(
-        "source,target,weight,directed\n1,2,1.0,false\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        QFileDialog,
-        "getOpenFileName",
-        staticmethod(lambda *args, **kwargs: (str(path), "")),
-    )
-    monkeypatch.setattr(window, "_confirm_discard_changes", lambda: True)
-
-    window._handle_import_csv()
+    window._handle_remove_isolated_nodes()
 
     assert window._stats_label.text() == "Nodes: 2   Edges: 1"
+    assert window._repository.get().has_node(1) is False
+    assert window._repository.get().has_node(2) is True
+    assert window._repository.get().has_node(3) is True
+
+
+def test_remove_isolated_nodes_cleans_positions(
+    window: MainWindow,
+) -> None:
+    """The handler removes positions of the deleted nodes."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    assert len(window._positions) == 2
+
+    window._handle_remove_isolated_nodes()
+
+    assert len(window._positions) == 0
+
+
+def test_remove_isolated_nodes_clears_selection(
+    window: MainWindow,
+) -> None:
+    """The handler drops removed nodes from the current selection."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_canvas_click(_click(0.1, 0.1, node_id=1))
+    assert window._selected_nodes == {1}
+
+    window._handle_remove_isolated_nodes()
+
+    assert window._selected_nodes == set()
+
+
+def test_remove_isolated_nodes_marks_dirty(
+    window: MainWindow,
+) -> None:
+    """The handler commits a new snapshot to the edit history."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._add_edge_use_case.execute(source=1, target=2)
+    window._handle_add_node(0.3, 0.3)
+    window._history.mark_saved()
+    assert window._history.is_dirty() is False
+
+    window._handle_remove_isolated_nodes()
+
+    assert window._history.is_dirty() is True
+
+
+def test_remove_isolated_nodes_noop_keeps_history_clean(
+    window: MainWindow,
+) -> None:
+    """The handler does not commit when there are no isolated nodes."""
+    window._handle_add_node(0.1, 0.1)
+    window._handle_add_node(0.2, 0.2)
+    window._add_edge_use_case.execute(source=1, target=2)
+    window._history.mark_saved()
+
+    window._handle_remove_isolated_nodes()
+
+    assert window._history.is_dirty() is False

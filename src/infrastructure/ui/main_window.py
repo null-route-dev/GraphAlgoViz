@@ -30,6 +30,9 @@ from application.statistics import compute_statistics
 from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
+from application.use_cases.remove_isolated_nodes import (
+    RemoveIsolatedNodesUseCase,
+)
 from application.use_cases.remove_node import RemoveNodeUseCase
 from application.use_cases.update_edge import UpdateEdgeUseCase
 from application.use_cases.update_node import UpdateNodeUseCase
@@ -195,6 +198,7 @@ class MainWindow(QMainWindow):
         add_edge_use_case: AddEdgeUseCase,
         remove_node_use_case: RemoveNodeUseCase,
         remove_edge_use_case: RemoveEdgeUseCase,
+        remove_isolated_nodes_use_case: RemoveIsolatedNodesUseCase,
         update_edge_use_case: UpdateEdgeUseCase,
         update_node_use_case: UpdateNodeUseCase,
         dark: bool = DEFAULT_DARK,
@@ -209,6 +213,7 @@ class MainWindow(QMainWindow):
         self._add_edge_use_case = add_edge_use_case
         self._remove_node_use_case = remove_node_use_case
         self._remove_edge_use_case = remove_edge_use_case
+        self._remove_isolated_nodes_use_case = remove_isolated_nodes_use_case
         self._update_edge_use_case = update_edge_use_case
         self._update_node_use_case = update_node_use_case
 
@@ -415,6 +420,10 @@ class MainWindow(QMainWindow):
         self._delete_action.setShortcut(QKeySequence.StandardKey.Delete)
         self._delete_action.triggered.connect(self._handle_delete_selected)
         edit_menu.addAction(self._delete_action)
+
+        remove_isolated_action = QAction("Remove &Isolated Nodes", self)
+        remove_isolated_action.triggered.connect(self._handle_remove_isolated_nodes)
+        edit_menu.addAction(remove_isolated_action)
 
         edit_menu.addSeparator()
 
@@ -992,6 +1001,25 @@ class MainWindow(QMainWindow):
             self._show_temporary_message("Run is not available")
             return
         self._panel._run_button.click()
+
+    def _handle_remove_isolated_nodes(self) -> None:
+        """Remove all nodes that have no incident edges."""
+        removed = self._remove_isolated_nodes_use_case.execute()
+        if not removed:
+            self._show_temporary_message("No isolated nodes")
+            return
+        for node_id in removed:
+            self._positions.pop(node_id, None)
+            self._selected_nodes.discard(node_id)
+        if self._selected_edge is not None:
+            source, target = self._selected_edge
+            if source not in self._positions or target not in self._positions:
+                self._selected_edge = None
+        self._commit()
+        self._sync_available_nodes()
+        self._update_graph_stats()
+        self._refresh_canvas()
+        self._show_temporary_message(f"Removed {len(removed)} isolated node(s)")
 
     def _paste_selection(
         self,

@@ -9,6 +9,9 @@ from application.services.layout_service import LayoutService
 from application.use_cases.add_edge import AddEdgeUseCase
 from application.use_cases.add_node import AddNodeUseCase
 from application.use_cases.remove_edge import RemoveEdgeUseCase
+from application.use_cases.remove_isolated_nodes import (
+    RemoveIsolatedNodesUseCase,
+)
 from application.use_cases.remove_node import RemoveNodeUseCase
 from application.use_cases.update_edge import UpdateEdgeUseCase
 from application.use_cases.update_node import UpdateNodeUseCase
@@ -37,6 +40,7 @@ def main() -> None:
     add_edge_use_case = AddEdgeUseCase(repository)
     remove_node_use_case = RemoveNodeUseCase(repository)
     remove_edge_use_case = RemoveEdgeUseCase(repository)
+    remove_isolated_nodes_use_case = RemoveIsolatedNodesUseCase(repository)
     update_edge_use_case = UpdateEdgeUseCase(repository)
     update_node_use_case = UpdateNodeUseCase(repository)
 
@@ -52,6 +56,7 @@ def main() -> None:
         add_edge_use_case=add_edge_use_case,
         remove_node_use_case=remove_node_use_case,
         remove_edge_use_case=remove_edge_use_case,
+        remove_isolated_nodes_use_case=remove_isolated_nodes_use_case,
         update_edge_use_case=update_edge_use_case,
         update_node_use_case=update_node_use_case,
         dark=dark,
