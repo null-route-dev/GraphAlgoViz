@@ -778,3 +778,47 @@ def test_remove_isolated_nodes_noop_keeps_history_clean(
     window._handle_remove_isolated_nodes()
 
     assert window._history.is_dirty() is False
+
+
+def test_export_graphml_writes_file(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The Export GraphML handler writes the current graph to a file."""
+    from PySide6.QtWidgets import QFileDialog
+
+    path = tmp_path / "out.graphml"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *args, **kwargs: (str(path), "")),
+    )
+    window._handle_add_node(0.5, 0.5)
+
+    window._handle_export_graphml()
+
+    assert path.exists()
+    content = path.read_text(encoding="utf-8")
+    assert "<graphml" in content
+
+
+def test_export_graphml_appends_suffix(
+    window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A filename without .graphml gets the suffix appended."""
+    from PySide6.QtWidgets import QFileDialog
+
+    path = tmp_path / "out"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *args, **kwargs: (str(path), "")),
+    )
+    window._handle_add_node(0.5, 0.5)
+
+    window._handle_export_graphml()
+
+    assert (tmp_path / "out.graphml").exists()

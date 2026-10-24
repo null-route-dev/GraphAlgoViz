@@ -23,6 +23,7 @@ from application.csv_import import CsvFormatError, import_csv
 from application.dot_export import export_dot
 from application.examples import all_examples, find_example
 from application.generators import generate
+from application.graphml_export import export_graphml
 from application.history import EditHistory, GraphState, snapshot
 from application.project_storage import ProjectStorage, ProjectStorageError
 from application.services.layout_service import LayoutService
@@ -76,6 +77,9 @@ CSV_SUFFIX = ".csv"
 
 DOT_FILTER = "Graphviz DOT file (*.dot);;All files (*)"
 DOT_SUFFIX = ".dot"
+
+GRAPHML_FILTER = "GraphML file (*.graphml);;All files (*)"
+GRAPHML_SUFFIX = ".graphml"
 
 EXPORT_FILTER = (
     "PNG image (*.png);;"
@@ -173,6 +177,20 @@ def _ensure_dot_suffix(path: Path) -> Path:
     if path.suffix.lower() == DOT_SUFFIX:
         return path
     return path.with_suffix(DOT_SUFFIX)
+
+
+def _ensure_graphml_suffix(path: Path) -> Path:
+    """Append the .graphml suffix when it is missing.
+
+    Args:
+        path: The path chosen by the user.
+
+    Returns:
+        The path, with .graphml appended if it did not have it.
+    """
+    if path.suffix.lower() == GRAPHML_SUFFIX:
+        return path
+    return path.with_suffix(GRAPHML_SUFFIX)
 
 
 ClipboardData = tuple[list[Node], list[Edge]]
@@ -372,6 +390,10 @@ class MainWindow(QMainWindow):
         export_dot_action = QAction("Export &DOT...", self)
         export_dot_action.triggered.connect(self._handle_export_dot)
         file_menu.addAction(export_dot_action)
+
+        export_graphml_action = QAction("Export &GraphML...", self)
+        export_graphml_action.triggered.connect(self._handle_export_graphml)
+        file_menu.addAction(export_graphml_action)
 
         file_menu.addSeparator()
 
@@ -845,6 +867,21 @@ class MainWindow(QMainWindow):
         path = _ensure_dot_suffix(Path(path_str))
         try:
             export_dot(self._repository.get(), path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self._show_temporary_message(f"Exported to {path.name}")
+
+    def _handle_export_graphml(self) -> None:
+        """Prompt for a destination and save the graph as GraphML."""
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Export GraphML", "", GRAPHML_FILTER
+        )
+        if not path_str:
+            return
+        path = _ensure_graphml_suffix(Path(path_str))
+        try:
+            export_graphml(self._repository.get(), path)
         except OSError as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
             return
